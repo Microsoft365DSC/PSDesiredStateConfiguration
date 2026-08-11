@@ -699,33 +699,6 @@ function ConvertTo-MOFInstance
     }
 
     #
-    # Add extra information about Author, GenerationHost, GenerationDate and Name if they are not specified
-    #
-    if ($Type -match 'OMI_ConfigurationDocument' -and $Properties)
-    {
-        if (-not $Properties.ContainsKey('Author'))
-        {
-            $result += " Author = `"$([system.environment]::UserName)`";`n"
-        }
-
-        if (-not $Properties.ContainsKey('GenerationDate'))
-        {
-            $result += " GenerationDate = `"$(Get-Date)`";`n"
-        }
-
-        if (-not $Properties.ContainsKey('GenerationHost'))
-        {
-            $result += " GenerationHost = `"$([system.environment]::MachineName)`";`n"
-        }
-
-        # todo: report error is configuration name does't match
-        if (-not $Properties.ContainsKey('Name'))
-        {
-            $result += " Name = `"$(Get-PSTopConfigurationName)`";`n"
-        }
-    }
-
-    #
     # Append the completed mof instance text to the overall document
     #
     $instanceText = "`n" + $result + "`n};`n"
@@ -2553,6 +2526,29 @@ function ImportCimAndScriptKeywordsFromModule
 }
 
 #
+# Writes a MOF document to disk with a deterministic encoding (UTF-8 without
+# BOM) on both Windows PowerShell 5.1 and PowerShell 7. The redirection
+# operator would write UTF-16 on 5.1 and UTF-8 on 7, producing different
+# bytes per edition. A trailing newline matches the redirection operator's
+# Out-File behavior so output stays byte-identical with previous releases.
+#
+function Write-MofDocumentFile
+{
+    param(
+        [Parameter(Mandatory)]
+        [string]
+        $Path,
+
+        [AllowNull()]
+        [string]
+        $Content
+    )
+
+    $resolvedPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine((Get-Location).ProviderPath, $Path))
+    [System.IO.File]::WriteAllText($resolvedPath, ($Content + "`r`n"), [System.Text.UTF8Encoding]::new($false))
+}
+
+#
 # A function to write the MOF instance texts of a node to files as meta config
 #
 function Write-MetaConfigFile
@@ -2572,8 +2568,7 @@ function Write-MetaConfigFile
 
     )
 
-    # Set up prefix for both the configuration and metaconfiguration documents.
-    $nodeDoc = "/*`n@TargetNode='$mofNode'`n" + "@GeneratedBy=$([system.environment]::UserName)`n@GenerationDate=$(Get-Date)`n@GenerationHost=$([system.environment]::MachineName)`n*/`n"
+    $nodeDoc = $null
     $nodeConfigurationDocument = $null
     [int]$nodeDocCount = 0
     $resourceManagers = $null
@@ -2699,17 +2694,14 @@ function Write-MetaConfigFile
             Write-Debug -Message "  ${ConfigurationName}: Adding missing OMI_ConfigurationDocument element to the document"
             if($Script:NodesPasswordEncrypted[$mofNode])
             {
-                $nodeDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"$($script:PSMetaConfigDocumentInstVersionInfo['MinimumCompatibleVersion'])`";`n CompatibleVersionAdditionalProperties= $(Get-CompatibleVersionAddtionaPropertiesStr);`n Author=`"$([system.environment]::UserName)`";`n GenerationDate=`"$(Get-Date)`";`n GenerationHost=`"$([system.environment]::MachineName)`";`n ContentType=`"PasswordEncrypted`";`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
+                $nodeDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"$($script:PSMetaConfigDocumentInstVersionInfo['MinimumCompatibleVersion'])`";`n CompatibleVersionAdditionalProperties= $(Get-CompatibleVersionAddtionaPropertiesStr);`n ContentType=`"PasswordEncrypted`";`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
             }
             else
             {
-                $nodeDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"$($script:PSMetaConfigDocumentInstVersionInfo['MinimumCompatibleVersion'])`";`n CompatibleVersionAdditionalProperties= $(Get-CompatibleVersionAddtionaPropertiesStr);`n Author=`"$([system.environment]::UserName)`";`n GenerationDate=`"$(Get-Date)`";`n GenerationHost=`"$([system.environment]::MachineName)`";`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
+                $nodeDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"$($script:PSMetaConfigDocumentInstVersionInfo['MinimumCompatibleVersion'])`";`n CompatibleVersionAdditionalProperties= $(Get-CompatibleVersionAddtionaPropertiesStr);`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
             }
         }
     }
-
-    # Fix up newlines to be CRLF
-    $nodeDoc = $nodeDoc -replace "`n", "`r`n"
 
     # todo: meta configuration might not be verifiable currently
     $errMsg = Test-MofInstanceText $nodeDoc
@@ -2727,7 +2719,7 @@ function Write-MetaConfigFile
         # Write to a file only if no error was generated or we are writing to .mof.error file
         if ($Script:PSConfigurationErrors -eq 0 -or $nodeOutfile.EndsWith('mof.error'))
         {
-            $nodeDoc > $nodeOutfile
+            Write-MofDocumentFile -Path $nodeOutfile -Content $nodeDoc
             Get-ChildItem $nodeOutfile
         }
     }
@@ -2804,9 +2796,8 @@ function Write-NodeMOFFile
         $mofNodeHash
     )
 
-    # Set up prefix for both the configuration and metaconfiguration documents.
-    $nodeDoc = "/*`n@TargetNode='$mofNode'`n" + "@GeneratedBy=$([system.environment]::UserName)`n@GenerationDate=$(Get-Date)`n@GenerationHost=$([system.environment]::MachineName)`n*/`n"
-    $nodeMetaDoc = $nodeDoc
+    $nodeDoc = $null
+    $nodeMetaDoc = $null
     $nodeConfigurationDocument = $null
     [int]$metaDocCount = 0
     [int]$nodeDocCount = 0
@@ -2863,11 +2854,11 @@ function Write-NodeMOFFile
             Write-Debug -Message "  ${ConfigurationName}: Adding missing OMI_ConfigurationDocument element to the document"
             if($Script:NodesPasswordEncrypted[$mofNode])
             {
-                $nodeMetaDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"1.0.0`";`n CompatibleVersionAdditionalProperties= $(Get-CompatibleVersionAddtionaPropertiesStr);`n Author=`"$([system.environment]::UserName)`";`n GenerationDate=`"$(Get-Date)`";`n GenerationHost=`"$([system.environment]::MachineName)`";`n ContentType=`"PasswordEncrypted`";`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
+                $nodeMetaDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"1.0.0`";`n CompatibleVersionAdditionalProperties= $(Get-CompatibleVersionAddtionaPropertiesStr);`n ContentType=`"PasswordEncrypted`";`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
             }
             else
             {
-                $nodeMetaDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"1.0.0`";`n CompatibleVersionAdditionalProperties= $(Get-CompatibleVersionAddtionaPropertiesStr);`n Author=`"$([system.environment]::UserName)`";`n GenerationDate=`"$(Get-Date)`";`n GenerationHost=`"$([system.environment]::MachineName)`";`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
+                $nodeMetaDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"1.0.0`";`n CompatibleVersionAdditionalProperties= $(Get-CompatibleVersionAddtionaPropertiesStr);`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
             }
         }
     }
@@ -2886,63 +2877,26 @@ function Write-NodeMOFFile
             {
                 if($nodeDoc.Contains("PsDscRunAsCredential"))
                 {
-                    $nodeDoc += "`ninstance of OMI_ConfigurationDocument`n
-                    {`n Version=`"2.0.0`";`n
-                        MinimumCompatibleVersion = `"2.0.0`";`n
-                        CompatibleVersionAdditionalProperties= {`"Omi_BaseResource:ConfigurationName`"};`n
-                        Author=`"$([system.environment]::UserName)`";`n
-                        GenerationDate=`"$(Get-Date)`";`n
-                        GenerationHost=`"$([system.environment]::MachineName)`";`n
-                        ContentType=`"PasswordEncrypted`";`n
-                        Name=`"$(Get-PSTopConfigurationName)`";`n
-                    };"
+                    $nodeDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"2.0.0`";`n CompatibleVersionAdditionalProperties= {`"Omi_BaseResource:ConfigurationName`"};`n ContentType=`"PasswordEncrypted`";`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
                 }
                 else
                 {
-                    $nodeDoc += "`ninstance of OMI_ConfigurationDocument`n
-                    {`n Version=`"2.0.0`";`n
-                        MinimumCompatibleVersion = `"1.0.0`";`n
-                        CompatibleVersionAdditionalProperties= {`"Omi_BaseResource:ConfigurationName`"};`n
-                        Author=`"$([system.environment]::UserName)`";`n
-                        GenerationDate=`"$(Get-Date)`";`n
-                        GenerationHost=`"$([system.environment]::MachineName)`";`n
-                        ContentType=`"PasswordEncrypted`";`n
-                        Name=`"$(Get-PSTopConfigurationName)`";`n
-                    };"
+                    $nodeDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"1.0.0`";`n CompatibleVersionAdditionalProperties= {`"Omi_BaseResource:ConfigurationName`"};`n ContentType=`"PasswordEncrypted`";`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
                 }
             }
             else
             {
                 if($nodeDoc.Contains("PsDscRunAsCredential"))
                 {
-                    $nodeDoc += "`ninstance of OMI_ConfigurationDocument`n
-                    {`n Version=`"2.0.0`";`n
-                        MinimumCompatibleVersion = `"2.0.0`";`n
-                        CompatibleVersionAdditionalProperties= {`"Omi_BaseResource:ConfigurationName`"};`n
-                        Author=`"$([system.environment]::UserName)`";`n
-                        GenerationDate=`"$(Get-Date)`";`n
-                        GenerationHost=`"$([system.environment]::MachineName)`";`n
-                        Name=`"$(Get-PSTopConfigurationName)`";`n
-                    };"
+                    $nodeDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"2.0.0`";`n CompatibleVersionAdditionalProperties= {`"Omi_BaseResource:ConfigurationName`"};`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
                 }
                 else
                 {
-                    $nodeDoc += "`ninstance of OMI_ConfigurationDocument`n
-                    {`n Version=`"2.0.0`";`n
-                        MinimumCompatibleVersion = `"1.0.0`";`n
-                        CompatibleVersionAdditionalProperties= {`"Omi_BaseResource:ConfigurationName`"};`n
-                        Author=`"$([system.environment]::UserName)`";`n
-                        GenerationDate=`"$(Get-Date)`";`n
-                        GenerationHost=`"$([system.environment]::MachineName)`";`n
-                        Name=`"$(Get-PSTopConfigurationName)`";`n
-                    };"
+                    $nodeDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"1.0.0`";`n CompatibleVersionAdditionalProperties= {`"Omi_BaseResource:ConfigurationName`"};`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
                 }
             }
         }
     }
-    # Fix up newlines to be CRLF
-    $nodeDoc = $nodeDoc -replace "`n", "`r`n"
-
     $errMsg = Test-MofInstanceText $nodeDoc
     if($errMsg)
     {
@@ -2958,15 +2912,14 @@ function Write-NodeMOFFile
         # Write to a file only if no error was generated or we are writing to .mof.error file
         if ($Script:PSConfigurationErrors -eq 0 -or $nodeOutfile.EndsWith('mof.error'))
         {
-            $nodeDoc > $nodeOutfile
+            Write-MofDocumentFile -Path $nodeOutfile -Content $nodeDoc
             Get-ChildItem $nodeOutfile
         }
     }
 
     if($nodeMetaDoc -match 'MSFT_DSCMetaConfiguration' -and $Script:PSConfigurationErrors -eq 0)
     {
-        $nodeMetaDoc = $nodeMetaDoc -replace "`n", "`r`n"
-        $nodeMetaDoc > $nodeMetaOutfile
+        Write-MofDocumentFile -Path $nodeMetaOutfile -Content $nodeMetaDoc
         Get-ChildItem $nodeMetaOutfile
     }
 }
