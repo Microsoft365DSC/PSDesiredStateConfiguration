@@ -1,5 +1,20 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
+
+# Resolve the module under test by path: prefer the packaged output, fall back
+# to the source tree. Importing by name would resolve to whatever module of the
+# same name is first on PSModulePath (inbox 1.1 on Windows PowerShell 5.1,
+# gallery 2.x on PowerShell 7).
+$script:PSDscModuleUnderTest = @(
+    (Join-Path (Split-Path $PSScriptRoot) 'out\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1')
+    (Join-Path (Split-Path $PSScriptRoot) 'src\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1')
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+Function Import-ModuleUnderTest {
+    Get-Module -Name PSDesiredStateConfiguration | Remove-Module -Force
+    Import-Module $script:PSDscModuleUnderTest -Force
+}
+
 Function Install-ModuleIfMissing {
     param(
         [parameter(Mandatory)]
@@ -55,6 +70,7 @@ Describe "Test PSDesiredStateConfiguration" {
 
             Add-AssertionOperator -Name 'HaveCommand' -Test $Function:BeCommand -SupportsArrayInput
 
+            Import-ModuleUnderTest
             $commands = Get-Command -Module PSDesiredStateConfiguration
         }
 
@@ -213,7 +229,7 @@ Describe "Test PSDesiredStateConfiguration" {
 Describe "DSC MOF Compilation" {
     BeforeAll {
         # ensure that module is imported
-        Import-Module -Name PSDesiredStateConfiguration -MinimumVersion 3.0.0
+        Import-ModuleUnderTest
         Install-ModuleIfMissing -Name XmlContentDsc -Force
     }
 
@@ -244,7 +260,7 @@ DSCTestConfig -OutputPath TestDrive:\DscTestConfig2
 Describe "All types DSC resource tests" {
     BeforeAll {
 
-        Import-Module -Name PSDesiredStateConfiguration -MinimumVersion 3.0.0
+        Import-ModuleUnderTest
 
         $SavedPSModulePath = $env:PSModulePath
 

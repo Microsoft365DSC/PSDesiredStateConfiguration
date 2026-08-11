@@ -75,6 +75,20 @@ Import-LocalizedData  -BindingVariable LocalizedData -FileName PSDesiredStateCon
 
 Import-Module $PSScriptRoot/helpers/DscResourceInfo.psm1
 
+# On Windows PowerShell 5.1 the inbox PSDesiredStateConfiguration 1.1 module
+# also exports the Configuration function. If it was loaded first, command
+# resolution may still prefer it over this module in some scenarios; warn the
+# user so compiles do not silently go through the inbox module.
+if ($PSVersionTable.PSVersion.Major -le 5)
+{
+    $inboxDscModule = Get-Module -Name PSDesiredStateConfiguration |
+        Where-Object { $_.Version -lt '2.0' }
+    if ($inboxDscModule)
+    {
+        Write-Warning -Message "The inbox PSDesiredStateConfiguration $($inboxDscModule.Version) module is already loaded in this session. Its Configuration command may shadow the one from this module. Run 'Remove-Module PSDesiredStateConfiguration' and import this module again by path to ensure this module is used."
+    }
+}
+
 # Set DSC HOME environment variable.
 $env:DSC_HOME = "$PSScriptRoot/Configuration"
 
@@ -2049,10 +2063,6 @@ function Configuration
                             $null = ImportCimAndScriptKeywordsFromModule -Module $mod -Resource $requiredResource -functionsToDefine $functionsToDefine
                         }
                     }
-                }
-                elseif ($moduleInfos.Count -eq 1)
-                {
-                    $modules.Add($moduleInfos)
                 }
             }
         }
