@@ -98,6 +98,12 @@ $script:DirectAccessMetaConfigPropertyList = @('AllowModuleOverWrite', 'Certific
 $script:ConfigurationNestingStack = New-Object -TypeName 'System.Collections.Generic.List[string]'
 $script:CimKeywordImplementationFunction = $null
 $script:MofTypeConstraintMap = @{}
+$script:FastHostActive = $false
+$script:FastHostValidateMof = $false
+$script:FastHostKeywords = $null
+$script:FastHostAdapters = $null
+$script:FastHostBodyCache = @{}
+$script:FastHostRegisteredModules = @{}
 $script:DscKeywordCacheState = @{
     DefaultFunctions     = $null
     KeywordSnapshot      = $null
@@ -166,6 +172,7 @@ function Clear-DscKeywordCache
     $script:DscKeywordCacheState.ExpectedKeywordCount = 0
     $script:DscKeywordCacheState.ImportedModules = @{}
 }
+Export-ModuleMember -Function Clear-DscKeywordCache
 
 function Import-CachedDscKeywords
 {
@@ -655,11 +662,14 @@ function ConvertTo-MOFInstance
     {
         $script:PsDscCompatibleVersion = "2.0.0"
     }
-    # Look up the property definitions for this keyword.
-    $PropertyTypes = [System.Management.Automation.Language.DynamicKeyword]::GetKeyword($Type).Properties
-
-    # and the CIM type name to use since the keyword might be an alias.
-    $ResourceName = [System.Management.Automation.Language.DynamicKeyword]::GetKeyword($Type).ResourceName
+    # Look up the keyword definition; fast-host keywords take precedence over the parser table.
+    $keywordDefinition = if ($script:FastHostKeywords) { $script:FastHostKeywords[$Type] } else { $null }
+    if ($null -eq $keywordDefinition)
+    {
+        $keywordDefinition = [System.Management.Automation.Language.DynamicKeyword]::GetKeyword($Type)
+    }
+    $PropertyTypes = $keywordDefinition.Properties
+    $ResourceName = $keywordDefinition.ResourceName
 
     if($script:IsMetaConfig -and ($ResourceName -eq 'MSFT_DSCMetaConfigurationV2'))
     {
@@ -2247,6 +2257,17 @@ function Configuration
             $functionsToDefine.Add('Set-PSMetaConfigVersionInfoV2', ${function:Set-PSMetaConfigVersionInfoV2})
             $functionsToDefine.Add('Get-ComplexResourceQualifier', ${function:Get-ComplexResourceQualifier})
 
+            if ($script:FastHostActive -and $script:FastHostAdapters)
+            {
+                foreach ($item in $script:FastHostAdapters.GetEnumerator())
+                {
+                    $functionsToDefine[$item.Key] = $item.Value
+                }
+                $functionsToDefine['Get-FastHostKeyword'] = ${function:Get-FastHostKeyword}
+                $functionsToDefine['Get-FastHostBodyScriptBlock'] = ${function:Get-FastHostBodyScriptBlock}
+                $functionsToDefine['Get-CimKeywordImplementationFunction'] = ${function:Get-CimKeywordImplementationFunction}
+            }
+
             #
             # Add the node keyword implementation function which must be module qualified even though
             # it's not exported from the module because the parsing logic always adds the module name
@@ -2609,7 +2630,7 @@ function Update-ModuleVersion
 
             $moduleVersionstring = "ModuleVersion = "
             $moduleVersionstring += "`"$moduleVersionValue`"" + ";"
-            $NodeInstanceAliases[$alias] = $first + $moduleVersionstring + "`r`n};"
+            $NodeInstanceAliases[$alias] = $first + $moduleVersionstring + "`n};"
         }
     }
 }
@@ -2645,14 +2666,14 @@ function Update-DependsOn
                 $needAdd = $true
                 $first = $instanceText.Substring(0, $curlyPosition)
 
-                $dependsOn = "DependsOn = {`r`n"
+                $dependsOn = "DependsOn = {`n"
                 $len = @($NodeResources[$resourceId]).Length
                 $dependsOn += foreach ($resourceId in $NodeResources[$resourceId])
                 {
                     '    ' + "`"$($resourceId -replace '\\', '\\' -replace '"', '\"')`"" +
                     $(if (--$len -gt 0)
                         {
-                            ",`r`n"
+                            ",`n"
                         }
                         else
                         {
@@ -2666,7 +2687,7 @@ function Update-DependsOn
 
         if($needAdd)
         {
-            $NodeInstanceAliases[$alias] = $first + $dependsOn + "`r`n};"
+            $NodeInstanceAliases[$alias] = $first + $dependsOn + "`n};"
         }
     }
 }
@@ -2708,12 +2729,12 @@ function Update-ConfigurationDocumentRef
             $needAdd = $true
             $first = $instanceText.Substring(0, $curlyPosition).TrimEnd()
 
-            $ConfigurationNameRef = "`r`n ConfigurationName = `"$ConfigurationName`";"
+            $ConfigurationNameRef = "`n ConfigurationName = `"$ConfigurationName`";"
         }
 
         if($needAdd)
         {
-            $NodeInstanceAliases[$alias] = $first + $ConfigurationNameRef + "`r`n};"
+            $NodeInstanceAliases[$alias] = $first + $ConfigurationNameRef + "`n};"
         }
     }
 }
@@ -2811,7 +2832,7 @@ function Write-MofDocumentFile
         $Content
     )
 
-    $resolvedPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine((Get-Location).ProviderPath, $Path))
+    $resolvedPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
     [System.IO.File]::WriteAllText($resolvedPath, ($Content + "`r`n"), [System.Text.UTF8Encoding]::new($false))
 }
 
@@ -3628,6 +3649,12 @@ function Test-MofInstanceText
         [Parameter(Mandatory)]
         $instanceText
     )
+
+    # Cache-driven keywords have no CIM classes registered, so MI validation cannot run.
+    if ($script:FastHostActive -and -not $script:FastHostValidateMof)
+    {
+        return
+    }
 
     # Ignore empty instances...
     if ( $instanceText)
@@ -5074,3 +5101,6 @@ New-Alias -Name 'pbcfg' -Value 'Publish-DSCConfiguration'
 New-Alias -Name 'ulcm' -Value 'Update-DscLocalConfigurationManager'
 New-Alias -Name 'upcfg' -Value 'Update-DSCConfiguration'
 New-Alias -Name 'gcfgs' -Value 'Get-DscConfigurationStatus'
+
+. "$PSScriptRoot\SchemaCache.ps1"
+. "$PSScriptRoot\FastHost.ps1"

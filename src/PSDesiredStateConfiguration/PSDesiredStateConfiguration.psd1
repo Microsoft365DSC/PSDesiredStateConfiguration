@@ -72,6 +72,9 @@ FunctionsToExport = @(
         'Get-DscResource'
         'Invoke-DscResource'
         'Clear-DscKeywordCache'
+        'Invoke-DscFastCompile'
+        'Export-DscSchemaCache'
+        'Test-DscSchemaCache'
     )
 
 

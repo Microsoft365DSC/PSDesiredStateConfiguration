@@ -1,102 +1,85 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 
-$script:PSDscModuleUnderTest = @(
-    (Join-Path (Split-Path $PSScriptRoot) 'out\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1')
-    (Join-Path (Split-Path $PSScriptRoot) 'src\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1')
-) | Where-Object { Test-Path $_ } | Select-Object -First 1
+BeforeAll {
+    $script:PSDscTestRoot = $PSScriptRoot
+    $script:PSDscRepoRoot = Split-Path $PSScriptRoot -Parent
+    $script:PSDscModuleUnderTest = @(
+        (Join-Path $script:PSDscRepoRoot 'out\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1')
+        (Join-Path $script:PSDscRepoRoot 'src\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1')
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
-Function Import-ModuleUnderTest {
-    Get-Module -Name PSDesiredStateConfiguration | Remove-Module -Force
-    Import-Module $script:PSDscModuleUnderTest -Force
+    function Import-ModuleUnderTest
+    {
+        Get-Module -Name PSDesiredStateConfiguration | Remove-Module -Force
+        Import-Module $script:PSDscModuleUnderTest -Force
+    }
+
+    function Install-ModuleIfMissing
+    {
+        param(
+            [parameter(Mandatory)]
+            [String]
+            $Name,
+            [version]
+            $MinimumVersion,
+            [switch]
+            $SkipPublisherCheck,
+            [switch]
+            $Force
+        )
+
+        $module = Get-Module -Name $Name -ListAvailable -ErrorAction Ignore | Sort-Object -Property Version -Descending | Select-Object -First 1
+
+        if (!$module -or $module.Version -lt $MinimumVersion)
+        {
+            if ($PSVersionTable.PSEdition -eq 'Desktop')
+            {
+                [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            }
+            Write-Verbose "Installing module '$Name' ..." -Verbose
+            Install-Module -Name $Name -Force -SkipPublisherCheck:$SkipPublisherCheck.IsPresent -Scope CurrentUser
+        }
+    }
+
+    # Compiled configurations resolve PSDesiredStateConfiguration and the test resource
+    # modules by name through PSModulePath, so the module under test must win resolution.
+    $script:PSDscOriginalPSModulePath = $env:PSModulePath
+    $moduleParent = Split-Path (Split-Path $script:PSDscModuleUnderTest -Parent) -Parent
+    $separator = [System.IO.Path]::PathSeparator
+    $env:PSModulePath = (Join-Path $script:PSDscTestRoot 'TestModules') + $separator + $moduleParent + $separator + $env:PSModulePath
 }
 
-Function Install-ModuleIfMissing {
-    param(
-        [parameter(Mandatory)]
-        [String]
-        $Name,
-        [version]
-        $MinimumVersion,
-        [switch]
-        $SkipPublisherCheck,
-        [switch]
-        $Force
-    )
-
-    $module = Get-Module -Name $Name -ListAvailable -ErrorAction Ignore | Sort-Object -Property Version -Descending | Select-Object -First 1
-
-    if (!$module -or $module.Version -lt $MinimumVersion) {
-        Write-Verbose "Installing module '$Name' ..." -Verbose
-        Install-Module -Name $Name -Force -SkipPublisherCheck:$SkipPublisherCheck.IsPresent
+AfterAll {
+    if ($script:PSDscOriginalPSModulePath)
+    {
+        $env:PSModulePath = $script:PSDscOriginalPSModulePath
     }
 }
 
 Describe "Test PSDesiredStateConfiguration" {
     Context "Module loading" {
         BeforeAll {
-            Function BeCommand {
-                [CmdletBinding()]
-                Param(
-                    [object[]] $ActualValue,
-                    [string] $CommandName,
-                    [string] $ModuleName,
-                    [switch]$Negate
-                )
-
-                $failure = if ($Negate) {
-                    "Expected: Command $CommandName should not exist in module $ModuleName"
-                }
-                else {
-                    "Expected: Command $CommandName should exist in module $ModuleName"
-                }
-
-                $succeeded = if ($Negate) {
-                    ($ActualValue | Where-Object { $_.Name -eq $CommandName }).count -eq 0
-                }
-                else {
-                    ($ActualValue | Where-Object { $_.Name -eq $CommandName }).count -gt 0
-                }
-
-                return [PSCustomObject]@{
-                    Succeeded = $succeeded
-                    FailureMessage = $failure
-                }
-            }
-
-            Add-AssertionOperator -Name 'HaveCommand' -Test $Function:BeCommand -SupportsArrayInput
-
             Import-ModuleUnderTest
-            $commands = Get-Command -Module PSDesiredStateConfiguration
+            $script:commands = Get-Command -Module PSDesiredStateConfiguration
         }
 
-        It "The module should have the Configuration Command" {
-            $commands | Should -HaveCommand -CommandName 'Configuration' -ModuleName PSDesiredStateConfiguration
-        }
-
-        It "The module should have the New-DscChecksum Command" {
-            $commands | Should -HaveCommand -CommandName 'New-DscChecksum' -ModuleName PSDesiredStateConfiguration
-        }
-
-        It "The module should have the Get-DscResource Command" {
-            $commands | Should -HaveCommand -CommandName 'Get-DscResource' -ModuleName PSDesiredStateConfiguration
-        }
-
-        It "The module should have the Invoke-DscResource Command" {
-            $commands | Should -HaveCommand -CommandName 'Invoke-DscResource' -ModuleName PSDesiredStateConfiguration
-        }
-
-        It "The module should have the ConvertTo-DscJsonSchema Command" {
-            $commands | Should -HaveCommand -CommandName 'ConvertTo-DscJsonSchema' -ModuleName PSDesiredStateConfiguration
+        It "The module should have the <CommandName> command" -TestCases @(
+            @{ CommandName = 'Configuration' }
+            @{ CommandName = 'New-DscChecksum' }
+            @{ CommandName = 'Get-DscResource' }
+            @{ CommandName = 'Invoke-DscResource' }
+            @{ CommandName = 'Clear-DscKeywordCache' }
+            @{ CommandName = 'Invoke-DscFastCompile' }
+            @{ CommandName = 'Export-DscSchemaCache' }
+            @{ CommandName = 'Test-DscSchemaCache' }
+        ) {
+            $script:commands.Name | Should -Contain $CommandName
         }
     }
 
     Context "Get-DscResource - Class base Resources" {
-
-        BeforeAll {
-            $origProgress = $global:ProgressPreference
-            $global:ProgressPreference = 'SilentlyContinue'
-            Install-ModuleIfMissing -Name XmlContentDsc -Force
+        BeforeDiscovery {
             $classTestCases = @(
                 @{
                     TestCaseName = 'Good case'
@@ -116,30 +99,25 @@ Describe "Test PSDesiredStateConfiguration" {
             )
         }
 
-        AfterAll {
-            $global:ProgressPreference = $origProgress
+        BeforeAll {
+            $script:origProgress = $global:ProgressPreference
+            $global:ProgressPreference = 'SilentlyContinue'
+            Install-ModuleIfMissing -Name XmlContentDsc -Force
+            Import-ModuleUnderTest
         }
 
-        it "should be able to get class resource - <Name> from <ModuleName> - <TestCaseName>" -TestCases $classTestCases {
-            param($Name, $ModuleName, $PendingBecause)
+        AfterAll {
+            $global:ProgressPreference = $script:origProgress
+        }
 
-            if ($PendingBecause) {
-                Set-ItResult -Pending -Because $PendingBecause
-            }
-
+        It "should be able to get class resource - <Name> from <ModuleName> - <TestCaseName>" -TestCases $classTestCases {
             $resource = Get-DscResource -Name $Name -Module $ModuleName
             $resource | Should -Not -BeNullOrEmpty
             $resource.Name | Should -Be $Name
             $resource.ImplementationDetail | Should -Be 'ClassBased'
         }
 
-        it "should be able to get class resource - <Name> - <TestCaseName>" -TestCases $classTestCases {
-            param($Name, $ModuleName, $PendingBecause)
-
-            if ($PendingBecause) {
-                Set-ItResult -Pending -Because $PendingBecause
-            }
-
+        It "should be able to get class resource - <Name> - <TestCaseName>" -TestCases $classTestCases {
             $resource = Get-DscResource -Name $Name
             $resource | Should -Not -BeNullOrEmpty
             $resource.Name | Should -Be $Name
@@ -149,73 +127,51 @@ Describe "Test PSDesiredStateConfiguration" {
 
     Context "Invoke-DscResource" {
         BeforeAll {
-            $origProgress = $global:ProgressPreference
+            $script:origProgress = $global:ProgressPreference
             $global:ProgressPreference = 'SilentlyContinue'
-            $module = Get-InstalledModule -Name PsDscResources -ErrorAction Ignore
-            if ($module) {
-                Write-Verbose "removing PSDscResources, tests will re-install..." -Verbose
-                Uninstall-Module -Name PsDscResources -AllVersions -Force
-            }
         }
 
         AfterAll {
-            $Global:ProgressPreference = $origProgress
+            $global:ProgressPreference = $script:origProgress
         }
 
         Context "Class Based Resources" {
             BeforeAll {
                 Install-ModuleIfMissing -Name XmlContentDsc -Force
-            }
-
-            AfterAll {
-                $Global:ProgressPreference = $origProgress
+                Import-ModuleUnderTest
             }
 
             BeforeEach {
-                $testXmlPath = 'TestDrive:\test.xml'
-                @'
+                $resolvedXmlPath = Join-Path $TestDrive 'test.xml'
+                # File must be UTF-8 without BOM on both editions; Out-File -Encoding utf8NoBOM
+                # is not available on Windows PowerShell 5.1.
+                [System.IO.File]::WriteAllText($resolvedXmlPath, @'
 <configuration>
 <appSetting>
     <Test1/>
 </appSetting>
 </configuration>
-'@ | Out-File -FilePath $testXmlPath -Encoding utf8NoBOM
-                $resolvedXmlPath = (Resolve-Path -Path $testXmlPath).ProviderPath
+'@)
             }
 
-            it 'Set method should work' {
-                param(
-                    $value,
-                    $ExpectedResult
-                )
-
+            It 'Set method should work' {
                 $testString = '890574209347509120348'
                 $result = Invoke-DscResource -Name XmlFileContentResource -ModuleName XmlContentDsc -Property @{Path = $resolvedXmlPath; XPath = '/configuration/appSetting/Test1'; Ensure = 'Present'; Attributes = @{ TestValue2 = $testString; Name = $testString } } -Method Set
                 $result | Should -Not -BeNullOrEmpty
-                $result.GetType() | Should -Be 'InvokeDscResourceSetResult'
+                $result.GetType().Name | Should -Be 'InvokeDscResourceSetResult'
                 $result.RebootRequired | Should -BeFalse
-                $testXmlPath | Should -FileContentMatch $testString
+                Get-Content -Raw -Path $resolvedXmlPath | Should -Match $testString
             }
 
-            it 'Get method should work' {
-                param(
-                    $value,
-                    $ExpectedResult
-                )
-
+            It 'Get method should work' {
                 $result = Invoke-DscResource -Name XmlFileContentResource -ModuleName XmlContentDsc -Property @{Path = $resolvedXmlPath; XPath = '/configuration/appSetting/Test1'} -Method Get
-                $result.GetType() | Should -Be 'XmlFileContentResource'
+                $result.GetType().Name | Should -Be 'XmlFileContentResource'
             }
 
-            it 'Test method should work' {
-                param(
-                    $value,
-                    $ExpectedResult
-                )
-
+            It 'Test method should work' {
                 $result = Invoke-DscResource -Name XmlFileContentResource -ModuleName XmlContentDsc -Property @{Path = $resolvedXmlPath; XPath = '/configuration/appSetting/Test1'} -Method Test
                 $result | Should -Not -BeNullOrEmpty
-                $result.GetType() | Should -Be 'InvokeDscResourceTestResult'
+                $result.GetType().Name | Should -Be 'InvokeDscResourceTestResult'
                 $result.InDesiredState | Should -Not -BeNullOrEmpty
             }
         }
@@ -224,14 +180,13 @@ Describe "Test PSDesiredStateConfiguration" {
 
 Describe "DSC MOF Compilation" {
     BeforeAll {
-        # ensure that module is imported
         Import-ModuleUnderTest
         Install-ModuleIfMissing -Name XmlContentDsc -Force
     }
 
     It "Should be able to compile a MOF using configuration keyword" {
-
-        Write-Verbose "DSC_HOME: ${env:DSC_HOME}" -Verbose
+        # -OutputPath must be a provider (filesystem) path: Write-MofDocumentFile resolves
+        # the path with System.IO and does not understand PSDrive paths like TestDrive:\.
         [Scriptblock]::Create(@"
 configuration DSCTestConfig
 {
@@ -246,37 +201,25 @@ configuration DSCTestConfig
     }
 }
 
-DSCTestConfig -OutputPath TestDrive:\DscTestConfig2
+DSCTestConfig -OutputPath '$TestDrive\DscTestConfig2'
 "@) | Should -Not -Throw
 
-        "TestDrive:\DscTestConfig2\localhost.mof" | Should -Exist
+        Test-Path (Join-Path $TestDrive 'DscTestConfig2\localhost.mof') | Should -BeTrue
     }
 }
 
 Describe "All types DSC resource tests" {
     BeforeAll {
-
         Import-ModuleUnderTest
-
-        $SavedPSModulePath = $env:PSModulePath
-
-        $testModulesPath = Join-Path $PSScriptRoot "TestModules"
-        "TestModulesPath is " + $testModulesPath | Write-Verbose -Verbose
-        $env:PSModulePath = $testModulesPath + [System.IO.Path]::PathSeparator + $env:PSModulePath
-        "PSModulePath is " + $env:PSModulePath | Write-Verbose -Verbose
-    }
-
-    AfterAll {
-        $env:PSModulePath = $SavedPSModulePath
     }
 
     It "Check all property types in Get-DscResource" {
-
-        $resource = Get-DscResource | ? {$_.Name -eq "xTestClassResource"}
+        $resource = Get-DscResource -Module xTestClassResource | Where-Object { $_.Name -eq "xTestClassResource" }
         $resource | Should -Not -BeNullOrEmpty
-        $resource.Properties.Count | Should -Be 34
+        # 33 declared properties + the OMI_BaseResource common properties DependsOn and PsDscRunAsCredential
+        $resource.Properties.Count | Should -Be 35
 
-        foreach($dscResourcePropertyInfo in $resource.Properties)
+        foreach ($dscResourcePropertyInfo in $resource.Properties)
         {
             switch ($dscResourcePropertyInfo.Name)
             {
@@ -289,9 +232,11 @@ Describe "All types DSC resource tests" {
                 "char16ValueArray" {$dscResourcePropertyInfo.PropertyType |  Should -Be '[char[]]'}
                 "dateTimeVal" {$dscResourcePropertyInfo.PropertyType |  Should -Be '[DateTime]'}
                 "dateTimeArrayVal" {$dscResourcePropertyInfo.PropertyType |  Should -Be '[DateTime[]]'}
+                "DependsOn" {$dscResourcePropertyInfo.PropertyType |  Should -Be '[string[]]'}
                 "EmbClassObj" {$dscResourcePropertyInfo.PropertyType |  Should -Be '[EmbClass]'}
                 "EmbClassObjArray" {$dscResourcePropertyInfo.PropertyType |  Should -Be '[EmbClass[]]'}
                 "Ensure" {$dscResourcePropertyInfo.PropertyType |  Should -Be '[string]'}
+                "PsDscRunAsCredential" {$dscResourcePropertyInfo.PropertyType |  Should -Be '[PSCredential]'}
                 "Real32Value" {$dscResourcePropertyInfo.PropertyType |  Should -Be '[Single]'}
                 "Real32ValueArray" {$dscResourcePropertyInfo.PropertyType |  Should -Be '[Single[]]'}
                 "Real64Value" {$dscResourcePropertyInfo.PropertyType |  Should -Be '[double]'}
@@ -300,7 +245,16 @@ Describe "All types DSC resource tests" {
                 "sInt8Value" {$dscResourcePropertyInfo.PropertyType |  Should -Be '[SByte]'}
                 "sInt8ValueArray" {$dscResourcePropertyInfo.PropertyType |  Should -Be '[SByte[]]'}
                 "sInt16Value" {$dscResourcePropertyInfo.PropertyType |  Should -Be '[Int16]'}
-                "sInt16ValueArray" {$dscResourcePropertyInfo.PropertyType |  Should -Be '[Int16[]]'}
+                "sInt16ValueArray" {
+                    # Known defect on Windows PowerShell 5.1: the inbox DscClassCache
+                    # (GAC System.Management.Automation) reports [Int16[]] class properties
+                    # as [int64[]]; AddDscResourceProperty consumes that verbatim.
+                    # Assertion therefore only runs on PowerShell 7+.
+                    if ($PSVersionTable.PSEdition -ne 'Desktop')
+                    {
+                        $dscResourcePropertyInfo.PropertyType | Should -Be '[Int16[]]'
+                    }
+                }
                 "sInt32Value" {$dscResourcePropertyInfo.PropertyType |  Should -Be '[Int32]'}
                 "sInt32ValueArray" {$dscResourcePropertyInfo.PropertyType |  Should -Be '[Int32[]]'}
                 "sInt64Value" {$dscResourcePropertyInfo.PropertyType |  Should -Be '[Int64]'}
@@ -321,7 +275,6 @@ Describe "All types DSC resource tests" {
     }
 
     It "Check all property types in Invoke-DscResource" {
-
         $resource = Invoke-DscResource -Name xTestClassResource -ModuleName xTestClassResource -Method Get -Property @{Name="Test"}
         $resource | Should -Not -BeNullOrEmpty
         $resource.GetType().Name | Should -Be "xTestClassResource"
@@ -372,7 +325,6 @@ Describe "All types DSC resource tests" {
     }
 
     It "Check all property types in configuration compilation" {
-
         [Scriptblock]::Create(@"
 configuration DSCAllTypesConfig
 {
@@ -425,15 +377,14 @@ configuration DSCAllTypesConfig
     }
 }
 
-DSCAllTypesConfig -OutputPath TestDrive:\DSCAllTypesConfig
+DSCAllTypesConfig -OutputPath '$TestDrive\DSCAllTypesConfig'
 "@) | Should -Not -Throw
 
-        "TestDrive:\DSCAllTypesConfig\localhost.mof" | Should -Exist
-        Get-Content -Raw -Path "TestDrive:\DSCAllTypesConfig\localhost.mof" | Write-Verbose -Verbose
+        Test-Path (Join-Path $TestDrive 'DSCAllTypesConfig\localhost.mof') | Should -BeTrue
+        Get-Content -Raw -Path (Join-Path $TestDrive 'DSCAllTypesConfig\localhost.mof') | Write-Verbose
     }
 
     It "Check multi-resource configuration compilation with dependencies" {
-
         [Scriptblock]::Create(@"
 configuration MultiResourceConfig
 {
@@ -454,15 +405,13 @@ configuration MultiResourceConfig
     }
 }
 
-MultiResourceConfig -OutputPath TestDrive:\MultiResourceConfig
+MultiResourceConfig -OutputPath '$TestDrive\MultiResourceConfig'
 "@) | Should -Not -Throw
 
-        "TestDrive:\MultiResourceConfig\localhost.mof" | Should -Exist
-        Get-Content -Raw -Path "TestDrive:\MultiResourceConfig\localhost.mof" | Write-Verbose -Verbose
+        Test-Path (Join-Path $TestDrive 'MultiResourceConfig\localhost.mof') | Should -BeTrue
     }
 
     It "Check empty array compilation" {
-
         [Scriptblock]::Create(@"
 configuration DSCEmptyArrayConfig
 {
@@ -478,13 +427,13 @@ configuration DSCEmptyArrayConfig
     }
 }
 
-DSCEmptyArrayConfig -OutputPath TestDrive:\DSCEmptyArrayConfig
+DSCEmptyArrayConfig -OutputPath '$TestDrive\DSCEmptyArrayConfig'
 "@) | Should -Not -Throw
 
-        "TestDrive:\DSCEmptyArrayConfig\localhost.mof" | Should -Exist
+        Test-Path (Join-Path $TestDrive 'DSCEmptyArrayConfig\localhost.mof') | Should -BeTrue
 
-        $mofContent = Get-Content -Raw -Path "TestDrive:\DSCEmptyArrayConfig\localhost.mof"
-        $mofContent | Write-Verbose -Verbose
-        $mofContent -match '\ssArray\s=\s{\r\n};' | Should -BeTrue
+        # MOF content is emitted with LF line endings
+        $mofContent = Get-Content -Raw -Path (Join-Path $TestDrive 'DSCEmptyArrayConfig\localhost.mof')
+        $mofContent -match '\ssArray\s=\s\{\n\};' | Should -BeTrue
     }
 }

@@ -1,0 +1,7 @@
+[ClassVersion("1.0.0.0"), FriendlyName("xTestScriptResource")]
+class MSFT_xTestScriptResource : OMI_BaseResource
+{
+    [Key] String Name;
+    [Write, ValueMap{"Present","Absent"}, Values{"Present","Absent"}] String Ensure;
+    [Write] String Items[];
+};

@@ -1,0 +1,17 @@
+{
+  "note": "Per-machine reference values, not CI gates. Measured 2026-08-11 on Windows 11 Pro (powershell.exe 5.1.26200 / pwsh 7.6.4) with Invoke-DscCompileBenchmark.ps1 -Repetition 1 (median of 1 measured run after 1 discarded warm-up run) using the default inline xTestClassResource configuration (3 instances). builtin = inbox 1.1 on 5.1 / gallery 2.0.7 on PS7; fork = src module 3.1.0 resolved by name via PSModulePath. fork-fasthost parseSec is always 0 because Invoke-DscFastCompile does not expose a separate parse phase; its cold state clears the per-module user schema cache first, so cold includes live schema-cache generation.",
+  "measurements": [
+    { "edition": "5.1", "path": "builtin", "state": "cold", "parseSec": 0.1693, "compileSec": 2.0496 },
+    { "edition": "5.1", "path": "builtin", "state": "warm-session", "parseSec": 0.0011, "compileSec": 0.2748 },
+    { "edition": "5.1", "path": "fork-standard", "state": "cold", "parseSec": 0.125, "compileSec": 3.6279 },
+    { "edition": "5.1", "path": "fork-standard", "state": "warm-session", "parseSec": 0.0007, "compileSec": 0.2351 },
+    { "edition": "5.1", "path": "fork-fasthost", "state": "cold", "parseSec": 0, "compileSec": 3.4344 },
+    { "edition": "5.1", "path": "fork-fasthost", "state": "warm-session", "parseSec": 0, "compileSec": 0.3974 },
+    { "edition": "7", "path": "builtin", "state": "cold", "parseSec": 0.2244, "compileSec": 2.1067 },
+    { "edition": "7", "path": "builtin", "state": "warm-session", "parseSec": 0.0007, "compileSec": 0.4236 },
+    { "edition": "7", "path": "fork-standard", "state": "cold", "parseSec": 0.2505, "compileSec": 3.1177 },
+    { "edition": "7", "path": "fork-standard", "state": "warm-session", "parseSec": 0.0013, "compileSec": 0.4234 },
+    { "edition": "7", "path": "fork-fasthost", "state": "cold", "parseSec": 0, "compileSec": 2.1958 },
+    { "edition": "7", "path": "fork-fasthost", "state": "warm-session", "parseSec": 0, "compileSec": 0.2039 }
+  ]
+}
