@@ -1,10 +1,6 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 
-# Resolve the module under test by path: prefer the packaged output, fall back
-# to the source tree. Importing by name would resolve to whatever module of the
-# same name is first on PSModulePath (inbox 1.1 on Windows PowerShell 5.1,
-# gallery 2.x on PowerShell 7).
 $script:PSDscModuleUnderTest = @(
     (Join-Path (Split-Path $PSScriptRoot) 'out\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1')
     (Join-Path (Split-Path $PSScriptRoot) 'src\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1')
@@ -331,7 +327,7 @@ Describe "All types DSC resource tests" {
         $resource.GetType().Name | Should -Be "xTestClassResource"
         $resource.Name | Should -Be "Test"
         $resource.Value | Should -Be "Inside if"
-        
+
         $resource.Name.GetType().Name | Should -Be "String"
         $resource.Value.GetType().Name | Should -Be "String"
         $resource.sArray.GetType().Name | Should -Be "String[]"
@@ -349,7 +345,7 @@ Describe "All types DSC resource tests" {
         $resource.Real32ValueArray.GetType().Name | Should -Be "Single[]"
         $resource.Real64Value.GetType().Name | Should -Be "Double"
         $resource.Real64ValueArray.GetType().Name | Should -Be "Double[]"
-        
+
         $resource.sInt8Value.GetType().Name | Should -Be "SByte"
         $resource.sInt8ValueArray.GetType().Name | Should -Be "SByte[]"
         $resource.sInt16Value.GetType().Name | Should -Be "Int16"

@@ -95,6 +95,194 @@ $env:DSC_HOME = "$PSScriptRoot/Configuration"
 $script:V1MetaConfigPropertyList = @('ConfigurationModeFrequencyMins', 'RebootNodeIfNeeded', 'ConfigurationMode', 'ActionAfterReboot', 'RefreshMode', 'CertificateID', 'ConfigurationID', 'DownloadManagerName', 'DownloadManagerCustomData', 'RefreshFrequencyMins', 'AllowModuleOverwrite', 'DebugMode', 'Credential')
 $script:DirectAccessMetaConfigPropertyList = @('AllowModuleOverWrite', 'CertificateID', 'ConfigurationDownloadManagers', 'ResourceModuleManagers', 'DebugMode', 'RebootNodeIfNeeded', 'RefreshMode', 'ConfigurationAgent')
 
+$script:ConfigurationNestingStack = New-Object -TypeName 'System.Collections.Generic.List[string]'
+$script:CimKeywordImplementationFunction = $null
+$script:MofTypeConstraintMap = @{}
+$script:DscKeywordCacheState = @{
+    DefaultFunctions     = $null
+    KeywordSnapshot      = $null
+    ExpectedKeywordCount = 0
+    ImportedModules      = @{}
+}
+
+function Get-CimKeywordImplementationFunction
+{
+    [OutputType([scriptblock])]
+    param()
+
+    if ($null -eq $script:CimKeywordImplementationFunction)
+    {
+        $driverText = [System.IO.File]::ReadAllText("$PSScriptRoot\CimKeywordImplementationFunction.ps1")
+        $script:CimKeywordImplementationFunction = [scriptblock]::Create($driverText)
+    }
+    $script:CimKeywordImplementationFunction
+}
+
+function Get-DscModuleFingerprint
+{
+    [OutputType([string])]
+    param (
+        [Parameter(Mandatory)]
+        [System.Management.Automation.PSModuleInfo]
+        $Module
+    )
+
+    $count = 0
+    $maxTicks = [long]0
+    foreach ($pattern in '*.psm1', '*.psd1', '*.mof')
+    {
+        foreach ($file in [System.IO.Directory]::EnumerateFiles($Module.ModuleBase, $pattern, [System.IO.SearchOption]::AllDirectories))
+        {
+            $count++
+            $ticks = [System.IO.File]::GetLastWriteTimeUtc($file).Ticks
+            if ($ticks -gt $maxTicks)
+            {
+                $maxTicks = $ticks
+            }
+        }
+    }
+    "${count}:$maxTicks"
+}
+
+function Test-DscKeywordCacheValid
+{
+    [OutputType([bool])]
+    param()
+
+    ($null -ne $script:DscKeywordCacheState.DefaultFunctions) -and
+    ($null -ne $script:DscKeywordCacheState.KeywordSnapshot) -and
+    ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::GetCachedKeywords().Count -ge $script:DscKeywordCacheState.ExpectedKeywordCount)
+}
+
+function Clear-DscKeywordCache
+{
+    [OutputType([void])]
+    param()
+
+    [System.Management.Automation.Language.DynamicKeyword]::Reset()
+    [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ClearCache()
+    $script:DscKeywordCacheState.DefaultFunctions = $null
+    $script:DscKeywordCacheState.KeywordSnapshot = $null
+    $script:DscKeywordCacheState.ExpectedKeywordCount = 0
+    $script:DscKeywordCacheState.ImportedModules = @{}
+}
+
+function Import-CachedDscKeywords
+{
+    [OutputType([bool])]
+    param (
+        [Parameter(Mandatory)]
+        [System.Management.Automation.PSModuleInfo]
+        $Module,
+
+        [string[]]
+        $Resources,
+
+        [Parameter(Mandatory)]
+        [System.Collections.Generic.Dictionary[string, scriptblock]]
+        $FunctionsToDefine
+    )
+
+    $entry = $script:DscKeywordCacheState.ImportedModules[$Module.Name]
+    if ($null -eq $entry -or $entry.Version -ne $Module.Version)
+    {
+        return $false
+    }
+
+    if (-not $entry.CoversAllResources)
+    {
+        foreach ($resource in $Resources)
+        {
+            if (-not $entry.Resources.Contains($resource))
+            {
+                return $false
+            }
+        }
+    }
+
+    if ((Get-DscModuleFingerprint -Module $Module) -ne $entry.Fingerprint)
+    {
+        Clear-DscKeywordCache
+        $defaultFunctions = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,scriptblock]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+        [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::LoadDefaultCimKeywords($defaultFunctions)
+        Save-DscDefaultFunctionSnapshot -FunctionsToDefine $defaultFunctions
+        foreach ($item in $defaultFunctions.GetEnumerator())
+        {
+            $FunctionsToDefine[$item.Key] = $item.Value
+        }
+        return $false
+    }
+
+    foreach ($item in $entry.Functions.GetEnumerator())
+    {
+        $FunctionsToDefine[$item.Key] = $item.Value
+    }
+    return $true
+}
+
+function Save-DscDefaultFunctionSnapshot
+{
+    [OutputType([void])]
+    param (
+        [Parameter(Mandatory)]
+        [System.Collections.Generic.Dictionary[string, scriptblock]]
+        $FunctionsToDefine
+    )
+
+    $snapshot = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,scriptblock]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($item in $FunctionsToDefine.GetEnumerator())
+    {
+        $snapshot[$item.Key] = $item.Value
+    }
+    $script:DscKeywordCacheState.DefaultFunctions = $snapshot
+    $script:DscKeywordCacheState.ExpectedKeywordCount = [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::GetCachedKeywords().Count
+}
+
+function Save-ImportedDscModuleState
+{
+    [OutputType([void])]
+    param (
+        [Parameter(Mandatory)]
+        [System.Management.Automation.PSModuleInfo]
+        $Module,
+
+        [string[]]
+        $Resources,
+
+        [Parameter(Mandatory)]
+        [System.Collections.Generic.HashSet[string]]
+        $KeysBefore,
+
+        [Parameter(Mandatory)]
+        [System.Collections.Generic.Dictionary[string, scriptblock]]
+        $FunctionsToDefine
+    )
+
+    $functions = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,scriptblock]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($item in $FunctionsToDefine.GetEnumerator())
+    {
+        if (-not $KeysBefore.Contains($item.Key))
+        {
+            $functions[$item.Key] = $item.Value
+        }
+    }
+
+    $resourceSet = New-Object -TypeName 'System.Collections.Generic.HashSet[string]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($resource in $Resources)
+    {
+        $null = $resourceSet.Add($resource)
+    }
+
+    $script:DscKeywordCacheState.ImportedModules[$Module.Name] = @{
+        Version            = $Module.Version
+        Fingerprint        = Get-DscModuleFingerprint -Module $Module
+        Resources          = $resourceSet
+        CoversAllResources = [bool]($Resources -contains '*')
+        Functions          = $functions
+    }
+    $script:DscKeywordCacheState.ExpectedKeywordCount = [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::GetCachedKeywords().Count
+}
+
 #################################################################
 # Code to determin what version related info is needed
 # and fixup the configuration document is it is already generated
@@ -190,6 +378,255 @@ function Get-CompatibleVersionAddtionaPropertiesStr
 ###########################################################
 # The MOF generation code
 ###########################################################
+#
+# Function to convert .NET datetime object to MOF datetime string format
+# We're not using [System.Management.ManagementDateTimeConverter]::ToDmtfDateTime()
+# because it has known bugs which are not going to be fixed.
+#
+function ConvertTo-MofDateTimeString ([datetime] $d)
+{
+    $utcOffset = ($d -$d.ToUniversalTime()).TotalMinutes
+    $utcOffsetString = if ($utcOffset -ge 0)
+    {
+        '+'
+    }
+    else
+    {
+        '-'
+    }
+    $utcOffsetString += ([System.Math]::Abs(($utcOffset)).ToString().PadLeft(3,'0'))
+    '{0}{1}' -f
+    $d.ToString('yyyyMMddHHmmss.ffffff'),
+    $utcOffsetString
+}
+
+#
+# Utility routine to find if username specified is
+# a domain user.
+#
+
+function IsDomainUser()
+{
+    param(
+        [Parameter(Mandatory)]
+        [string]
+        $UserName
+    )
+    # if username contains '\' example: domain\username or '@' example: username@mydomain.com
+    # it may not be a local user.
+    if( -not( $UserName.Contains('\') -or $UserName.Contains('@')))
+    {
+        # it is a local user
+        return $false
+    }
+    elseif( $UserName.Contains('@'))
+    {
+        return $true
+    }
+    else
+    {
+        # In case of '\', domain name can be local machine.
+        $result = $UserName.Split('\')
+        if( $result.Count -ge 2)
+        {
+            $domain = $result[0]
+            $localMachineNames = @("localhost","127.0.0.1","::1")
+            $isDomainUser = $true
+            if( $localMachineNames -icontains $domain)
+            {
+                $isDomainUser = $false
+            }
+            return $isDomainUser
+        }
+    }
+    $true
+}
+
+#
+# Utility routine to render a property
+# as a string in MOF syntax.
+#
+function stringify ($Value, $asArray = $false, $targetType = [string])
+{
+    $result = if ($Value -is [array] -or $asArray)
+    {
+        '{'
+        $len = @($Value).Length
+        foreach ($e in $Value)
+        {
+            '    ' + (stringify $e -targetType $targetType) +
+            $(if (--$len -gt 0)
+                {
+                    ','
+                }
+                else
+                {
+                    ''
+                }
+            )
+        }
+        '}'
+    }
+    elseif ($Value -is [PSCredential] )
+    {
+        # If the input object is a PSCredential, turn it into an MSFT_Credential with an encrypted password.
+        $clearText = [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::GetStringFromSecureString($Value.Password)
+        $newValue = @{
+            UserName = $Value.UserName
+            Password = $clearText
+        }
+        # Recurse to build the object.
+        ConvertTo-MOFInstance MSFT_Credential $newValue
+    }
+    elseif ($Value -is [System.Collections.Hashtable])
+    {
+        # Collect the individual strings
+        $elementsAsStrings = foreach ($p in $Value.GetEnumerator())
+        {
+            ConvertTo-MOFInstance MSFT_KeyValuePair @{
+                Key   = $p.Key
+                Value = $p.Value
+            }
+        }
+        # Produce a single formatted string.
+        '   ' + ($elementsAsStrings -join ",`n   ") + "`n"
+    }
+    elseif ($Value -is [ScriptBlock] )
+    {
+        # Find all $using: variables used in the script and replace them with normal variables
+        $scriptText = "$Value"
+        # Need to create a new scriptblock so the extent offsets are correct
+        $scriptAst = [scriptblock]::Create($scriptText).Ast
+        # get the $using: variable asts into an array
+        $variables = $scriptAst.FindAll({
+                param ($ast)
+                $ast.GetType().FullName -match 'VariableExpressionAst' -and
+                $ast.Extent.Text -match '^\$using:'
+            }
+        , $true).ToArray()
+
+        # do the substitutions in reverse order
+        [Array]::Reverse($variables)
+        $variables | ForEach-Object -Process {
+            $start = $_.Extent.StartOffset
+            $length = $_.Extent.EndOffset - $start
+            $newName = '$' + $_.VariablePath.UserPath
+            $scriptText = $scriptText.Remove($start, $length).Insert($start, $newName)
+        }
+
+        $completeScript = ''
+        # generate assignement statements to set the variable values on the other side
+        # using serialized values passed from the local environment
+        $varNames = @($variables).VariablePath.UserPath | Sort-Object -Unique
+        foreach ($v in $varNames)
+        {
+            # If the ScriptBlock was defined in a module, then use the module for lookups
+            if ($Value.Module)
+            {
+                $var = $Value.Module.SessionState.PSVariable.Get($v)
+            }
+            else
+            {
+                # Otherwise look up in the callers context
+                $var = $ExecutionContext.SessionState.Module.GetVariableFromCallersModule($v)
+            }
+
+            if ($var)
+            {
+                $varValue = $var.Value
+                # Skip null values but preserve empty arrays and strings for type propigation
+                if ($null -ne $varValue)
+                {
+                    # Pass strings quoted; amn explicit type check is needed because -is recognizes too many things as strings
+                    if ($varValue -is [string])
+                    {
+                        $completeScript += "`$$v ='" + ($varValue -replace "'", "''") + "'`n"
+                    }
+                    else
+                    {
+                        # Serialize everything else
+                        $serializedValue = [System.Management.Automation.PSSerializer]::Serialize($varValue) -replace "'", "''"
+                        $completeScript += "`$$v = [System.Management.Automation.PSSerializer]::Deserialize('$serializedValue')`n"
+                    }
+                }
+            }
+        }
+
+        # Merge in the actual scriptblock body
+        $completeScript += $scriptText
+
+        # Quote the string so it's suitable to embed in the MOF file...
+        '"' + ($completeScript -replace '\\', '\\' -replace "[`r]*`n", '\n'  -replace '"', '\"') + '"'
+    }
+    elseif ($targetType -eq [datetime])
+    {
+        # If the target is a datetime, convert the argument to a datetime and then render that
+        # as a DMTF datetime...
+        '"' + (ConvertTo-MofDateTimeString $Value) + '"'
+    }
+    elseif ($targetType -eq [double])
+    {
+        # MOF syntax requires reals to always have a decimal point so add
+        # so add one if the string representation does contain one.
+        [string] $dblAsString = [double] $Value
+        if ( -not $dblAsString.Contains('.') )
+        {
+            $dblAsString += '.0'
+        }
+        $dblAsString
+    }
+    elseif ($targetType -eq [char])
+    {
+        # A char16 is encode as a single quoted character
+        "'$Value'"
+    }
+    elseif ($targetType -eq [int64])
+    {
+        [int64] $Value
+    }
+    elseif ($targetType -eq [uint64])
+    {
+        [uint64] $Value
+    }
+    elseif ($targetType -eq [bool])
+    {
+        if($Value -is [string])
+        {
+            $errorMessage = $LocalizedData.CannotConvertStringToBool
+            ThrowError -ExceptionName 'System.ArgumentException' -ExceptionMessage $errorMessage -ExceptionObject $Value -ErrorId 'CannotConvertStringToBool' -ErrorCategory InvalidArgument
+        }
+        else
+        {
+            [bool]$Value
+        }
+    }
+    elseif ($targetType -ne [string])
+    {
+        # Cast the value to the target type...
+        $Value -as $targetType
+    }
+    elseif ($Value -is [string] -and -not $InstanceAliases[$Value] )
+    {
+        '"' + ($Value -replace '\\', '\\' -replace "`r?`n", '\n'  -replace '"', '\"') + '"'
+    }
+    elseif ($null -eq $Value)
+    {
+        'NULL'
+    }
+    elseif (($targetType -eq [string]) -and  ($Value -isnot [string]))
+    {
+        # Cast value to string if it is not already a string, this is for covering cases like when a user assign an integer while the
+        # CIM property type is string
+        '"' + ($Value -replace '\\', '\\' -replace "`r?`n", '\n'  -replace '"', '\"') + '"'
+    }
+    else
+    {
+        $Value
+    }
+
+    $result -join "`n"
+}
+
 
 #
 # This scriptblock takes a type name and a list of properties and produces
@@ -229,254 +666,6 @@ function ConvertTo-MOFInstance
         Generate-VersionInfo $PropertyTypes $Properties
     }
 
-    #
-    # Function to convert .NET datetime object to MOF datetime string format
-    # We're not using [System.Management.ManagementDateTimeConverter]::ToDmtfDateTime()
-    # because it has known bugs which are not going to be fixed.
-    #
-    function ConvertTo-MofDateTimeString ([datetime] $d)
-    {
-        $utcOffset = ($d -$d.ToUniversalTime()).TotalMinutes
-        $utcOffsetString = if ($utcOffset -ge 0)
-        {
-            '+'
-        }
-        else
-        {
-            '-'
-        }
-        $utcOffsetString += ([System.Math]::Abs(($utcOffset)).ToString().PadLeft(3,'0'))
-        '{0}{1}' -f
-        $d.ToString('yyyyMMddHHmmss.ffffff'),
-        $utcOffsetString
-    }
-
-    #
-    # Utility routine to find if username specified is
-    # a domain user.
-    #
-
-    function IsDomainUser()
-    {
-        param(
-            [Parameter(Mandatory)]
-            [string]
-            $UserName
-        )
-        # if username contains '\' example: domain\username or '@' example: username@mydomain.com
-        # it may not be a local user.
-        if( -not( $UserName.Contains('\') -or $UserName.Contains('@')))
-        {
-            # it is a local user
-            return $false
-        }
-        elseif( $UserName.Contains('@'))
-        {
-            return $true
-        }
-        else
-        {
-            # In case of '\', domain name can be local machine.
-            $result = $UserName.Split('\')
-            if( $result.Count -ge 2)
-            {
-                $domain = $result[0]
-                $localMachineNames = @("localhost","127.0.0.1","::1")
-                $isDomainUser = $true
-                if( $localMachineNames -icontains $domain)
-                {
-                    $isDomainUser = $false
-                }
-                return $isDomainUser
-            }
-        }
-        $true
-    }
-
-    #
-    # Utility routine to render a property
-    # as a string in MOF syntax.
-    #
-    function stringify ($Value, $asArray = $false, $targetType = [string])
-    {
-        $result = if ($Value -is [array] -or $asArray)
-        {
-            '{'
-            $len = @($Value).Length
-            foreach ($e in $Value)
-            {
-                '    ' + (stringify $e -targetType $targetType) +
-                $(if (--$len -gt 0)
-                    {
-                        ','
-                    }
-                    else
-                    {
-                        ''
-                    }
-                )
-            }
-            '}'
-        }
-        elseif ($Value -is [PSCredential] )
-        {
-            # If the input object is a PSCredential, turn it into an MSFT_Credential with an encrypted password.
-            $clearText = [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::GetStringFromSecureString($Value.Password)
-            $newValue = @{
-                UserName = $Value.UserName
-                Password = $clearText
-            }
-            # Recurse to build the object.
-            ConvertTo-MOFInstance MSFT_Credential $newValue
-        }
-        elseif ($Value -is [System.Collections.Hashtable])
-        {
-            # Collect the individual strings
-            $elementsAsStrings = foreach ($p in $Value.GetEnumerator())
-            {
-                ConvertTo-MOFInstance MSFT_KeyValuePair @{
-                    Key   = $p.Key
-                    Value = $p.Value
-                }
-            }
-            # Produce a single formatted string.
-            '   ' + ($elementsAsStrings -join ",`n   ") + "`n"
-        }
-        elseif ($Value -is [ScriptBlock] )
-        {
-            # Find all $using: variables used in the script and replace them with normal variables
-            $scriptText = "$Value"
-            # Need to create a new scriptblock so the extent offsets are correct
-            $scriptAst = [scriptblock]::Create($scriptText).Ast
-            # get the $using: variable asts into an array
-            $variables = $scriptAst.FindAll({
-                    param ($ast)
-                    $ast.GetType().FullName -match 'VariableExpressionAst' -and
-                    $ast.Extent.Text -match '^\$using:'
-                }
-            , $true).ToArray()
-
-            # do the substitutions in reverse order
-            [Array]::Reverse($variables)
-            $variables | ForEach-Object -Process {
-                $start = $_.Extent.StartOffset
-                $length = $_.Extent.EndOffset - $start
-                $newName = '$' + $_.VariablePath.UserPath
-                $scriptText = $scriptText.Remove($start, $length).Insert($start, $newName)
-            }
-
-            $completeScript = ''
-            # generate assignement statements to set the variable values on the other side
-            # using serialized values passed from the local environment
-            $varNames = @($variables).VariablePath.UserPath | Sort-Object -Unique
-            foreach ($v in $varNames)
-            {
-                # If the ScriptBlock was defined in a module, then use the module for lookups
-                if ($Value.Module)
-                {
-                    $var = $Value.Module.SessionState.PSVariable.Get($v)
-                }
-                else
-                {
-                    # Otherwise look up in the callers context
-                    $var = $ExecutionContext.SessionState.Module.GetVariableFromCallersModule($v)
-                }
-
-                if ($var)
-                {
-                    $varValue = $var.Value
-                    # Skip null values but preserve empty arrays and strings for type propigation
-                    if ($null -ne $varValue)
-                    {
-                        # Pass strings quoted; amn explicit type check is needed because -is recognizes too many things as strings
-                        if ($varValue -is [string])
-                        {
-                            $completeScript += "`$$v ='" + ($varValue -replace "'", "''") + "'`n"
-                        }
-                        else
-                        {
-                            # Serialize everything else
-                            $serializedValue = [System.Management.Automation.PSSerializer]::Serialize($varValue) -replace "'", "''"
-                            $completeScript += "`$$v = [System.Management.Automation.PSSerializer]::Deserialize('$serializedValue')`n"
-                        }
-                    }
-                }
-            }
-
-            # Merge in the actual scriptblock body
-            $completeScript += $scriptText
-
-            # Quote the string so it's suitable to embed in the MOF file...
-            '"' + ($completeScript -replace '\\', '\\' -replace "[`r]*`n", '\n'  -replace '"', '\"') + '"'
-        }
-        elseif ($targetType -eq [datetime])
-        {
-            # If the target is a datetime, convert the argument to a datetime and then render that
-            # as a DMTF datetime...
-            '"' + (ConvertTo-MofDateTimeString $Value) + '"'
-        }
-        elseif ($targetType -eq [double])
-        {
-            # MOF syntax requires reals to always have a decimal point so add
-            # so add one if the string representation does contain one.
-            [string] $dblAsString = [double] $Value
-            if ( -not $dblAsString.Contains('.') )
-            {
-                $dblAsString += '.0'
-            }
-            $dblAsString
-        }
-        elseif ($targetType -eq [char])
-        {
-            # A char16 is encode as a single quoted character
-            "'$Value'"
-        }
-        elseif ($targetType -eq [int64])
-        {
-            [int64] $Value
-        }
-        elseif ($targetType -eq [uint64])
-        {
-            [uint64] $Value
-        }
-        elseif ($targetType -eq [bool])
-        {
-            if($Value -is [string])
-            {
-                $errorMessage = $LocalizedData.CannotConvertStringToBool
-                ThrowError -ExceptionName 'System.ArgumentException' -ExceptionMessage $errorMessage -ExceptionObject $Value -ErrorId 'CannotConvertStringToBool' -ErrorCategory InvalidArgument
-            }
-            else
-            {
-                [bool]$Value
-            }
-        }
-        elseif ($targetType -ne [string])
-        {
-            # Cast the value to the target type...
-            $Value -as $targetType
-        }
-        elseif ($Value -is [string] -and -not $InstanceAliases[$Value] )
-        {
-            '"' + ($Value -replace '\\', '\\' -replace "`r?`n", '\n'  -replace '"', '\"') + '"'
-        }
-        elseif ($null -eq $Value)
-        {
-            'NULL'
-        }
-        elseif (($targetType -eq [string]) -and  ($Value -isnot [string]))
-        {
-            # Cast value to string if it is not already a string, this is for covering cases like when a user assign an integer while the
-            # CIM property type is string
-            '"' + ($Value -replace '\\', '\\' -replace "`r?`n", '\n'  -replace '"', '\"') + '"'
-        }
-        else
-        {
-            $Value
-        }
-
-        $result -join "`n"
-    }
 
     Write-Debug -Message "        BEGIN MOF GENERATION FOR $Type"
 
@@ -528,46 +717,54 @@ function ConvertTo-MOFInstance
                 # Convert the CIM typename to the appropriate .NET type to use
                 # to convert the input object into an appropriately encoded string
                 # using the PowerShell type conversion semantics.
-                switch -regex ($targetTypeName)
+                $targetType = if ($null -ne $targetTypeName) { $script:MofTypeConstraintMap[$targetTypeName] } else { $null }
+                if ($null -eq $targetType)
                 {
-                    # unsigned integer types
-                    '^sint[0-9]{1,2}'
+                    switch -regex ($targetTypeName)
                     {
-                        $targetType = [int64]
-                        break
+                        # unsigned integer types
+                        '^sint[0-9]{1,2}'
+                        {
+                            $targetType = [int64]
+                            break
+                        }
+                        # Single 16 bit character (note - this type is deprecated and removed in MOFv3
+                        '^char16'
+                        {
+                            $targetType = [char]
+                            break
+                        }
+                        # signed integer types
+                        '^uint[0-9]{0,2}'
+                        {
+                            $targetType = [uint64]
+                            break
+                        }
+                        # reals
+                        '^real32|^real64'
+                        {
+                            $targetType = [double]
+                            break
+                        }
+                        # boolean
+                        '^boolean'
+                        {
+                            $targetType = [bool]
+                        }
+                        # datetime
+                        'datetime'
+                        {
+                            $targetType = [datetime]
+                        }
+                        # everything else render directly as a string...
+                        default
+                        {
+                            $targetType = [string]
+                        }
                     }
-                    # Single 16 bit character (note - this type is deprecated and removed in MOFv3
-                    '^char16'
+                    if (-not [string]::IsNullOrEmpty($targetTypeName))
                     {
-                        $targetType = [char]
-                        break
-                    }
-                    # signed integer types
-                    '^uint[0-9]{0,2}'
-                    {
-                        $targetType = [uint64]
-                        break
-                    }
-                    # reals
-                    '^real32|^real64'
-                    {
-                        $targetType = [double]
-                        break
-                    }
-                    # boolean
-                    '^boolean'
-                    {
-                        $targetType = [bool]
-                    }
-                    # datetime
-                    'datetime'
-                    {
-                        $targetType = [datetime]
-                    }
-                    # everything else render directly as a string...
-                    default
-                    {
-                        $targetType = [string]
+                        $script:MofTypeConstraintMap[$targetTypeName] = $targetType
                     }
                 }
 
@@ -961,12 +1158,12 @@ function Node
                 # Initialize dictionary to detect duplicate resources
                 if ($null -eq $Script:DuplicateResources)
                 {
-                    $Script:DuplicateResources = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[System.Collections.Hashtable]]]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+                    $Script:DuplicateResources = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.Dictionary[string,System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[System.Collections.Hashtable]]]]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
                 }
 
                 if (-not $Script:DuplicateResources.ContainsKey($Name))
                 {
-                    $Script:DuplicateResources[$Name] = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[System.Collections.Hashtable]]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+                    $Script:DuplicateResources[$Name] = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[System.Collections.Hashtable]]]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
                 }
 
                 try
@@ -1066,23 +1263,25 @@ function Get-ConfigurationErrorCount
 function Get-ComplexResourceQualifier
 {
     [OutputType([string])]
-    param()
+    param (
+        [switch]
+        $IncludeCurrent
+    )
 
-   # walk the call stack to get at all of the enclosing configuration resource IDs
-    $stackedConfigs = @(Get-PSCallStack |
-        Where-Object -FilterScript { ($null -ne $_.InvocationInfo.MyCommand) -and ($_.InvocationInfo.MyCommand.CommandType -eq 'Configuration') })
-
-    $complexResourceQualifier = $null
-    # keep all but the top-most
-    if(@($stackedConfigs).Length -ge 3)
+    $stack = $script:ConfigurationNestingStack
+    $start = if ($IncludeCurrent) { $stack.Count - 1 } else { $stack.Count - 2 }
+    if ($start -lt 1)
     {
-        $stackedConfigs = $stackedConfigs[1..(@($stackedConfigs).Length - 2)]
-        # and build the complex resource ID suffix.
-        $complexResourceQualifier = ( $stackedConfigs | foreach-Object -Process { '[' + $_.Command + ']' + $_.InvocationInfo.BoundParameters['InstanceName'] } ) -join '::'
+        return $null
     }
 
-    return $complexResourceQualifier
- }
+    $parts = for ($i = $start; $i -ge 1; $i--)
+    {
+        $stack[$i]
+    }
+
+    return ($parts -join '::')
+}
 
 #
 # A function to set the document text for default (unnamed) node
@@ -1397,21 +1596,36 @@ function Test-ConflictingResources
     # Initialize $Script:DuplicateResources if not already initialized
     if ($null -eq $Script:DuplicateResources)
     {
-        $Script:DuplicateResources = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[System.Collections.Hashtable]]]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+        $Script:DuplicateResources = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.Dictionary[string,System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[System.Collections.Hashtable]]]]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
     }
 
     if (-not $Script:DuplicateResources.ContainsKey($currentNodeName))
     {
-        $Script:DuplicateResources[$currentNodeName] = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[System.Collections.Hashtable]]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+        $Script:DuplicateResources[$currentNodeName] = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[System.Collections.Hashtable]]]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
     }
 
     if ( -not $Script:DuplicateResources[$currentNodeName].ContainsKey($keyword))
     {
-        $Script:DuplicateResources[$currentNodeName][$keyword] = New-Object 'System.Collections.Generic.List[System.Collections.Hashtable]'
+        $Script:DuplicateResources[$currentNodeName][$keyword] = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[System.Collections.Hashtable]]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+    }
+
+    # Bucket resources by their key-property values so only genuine key collisions are compared.
+    $keySignature = @(foreach ($keywordProperty in ($keywordData.Properties.GetEnumerator() | Sort-Object -Property Key))
+    {
+        if ($keywordProperty.Value.IsKey)
+        {
+            "$($properties[$keywordProperty.Key])"
+        }
+    }) -join [string][char]0
+
+    $keywordBuckets = $Script:DuplicateResources[$currentNodeName][$keyword]
+    if (-not $keywordBuckets.ContainsKey($keySignature))
+    {
+        $keywordBuckets[$keySignature] = New-Object 'System.Collections.Generic.List[System.Collections.Hashtable]'
     }
 
     # Find if current resource is duplicate and conflicting.
-    foreach($resource in $Script:DuplicateResources[$currentNodeName][$keyword])
+    foreach($resource in $keywordBuckets[$keySignature])
     {
         $keyPropertiesMatch = $true
         $nonKeyPropertiesMatch = $true
@@ -1517,7 +1731,7 @@ function Test-ConflictingResources
         }
     }
 
-    $Script:DuplicateResources[$currentNodeName][$keyword].Add($properties)
+    $keywordBuckets[$keySignature].Add($properties)
 
 }
 
@@ -1681,8 +1895,8 @@ function Initialize-ConfigurationRuntimeState
     $Script:NoNameNodeKeys = New-Object -TypeName 'System.Collections.Generic.Dictionary[String,System.Collections.Generic.HashSet[string]]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
 
     # For the current configuration, $Script:DuplicateResources["Type"] contains list with properties of all resources of the specific type
-    [System.Collections.Generic.Dictionary[string,System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[System.Collections.Hashtable]]]] `
-    $Script:DuplicateResources = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[System.Collections.Hashtable]]]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+    [System.Collections.Generic.Dictionary[string,System.Collections.Generic.Dictionary[string,System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[System.Collections.Hashtable]]]]] `
+    $Script:DuplicateResources = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.Dictionary[string,System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[System.Collections.Hashtable]]]]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
 
     # Show Import-DscResource warning if in-build resources are used in the Configuration without Import-DscResource statement.
     [bool] $script:ShowImportDscResourceWarning = $false
@@ -1888,9 +2102,13 @@ function Configuration
         return $moduleInfos
     }
 
+    $nestingPushed = $false
     try
     {
         Write-Debug -Message "BEGIN CONFIGURATION '$Name' PROCESSING: OutputPath: '$OutputPath'"
+
+        $script:ConfigurationNestingStack.Add("[$Name]$InstanceName")
+        $nestingPushed = $true
 
         if ($Name -inotmatch  '^[a-z][a-z0-9_]*$')
         {
@@ -1953,9 +2171,23 @@ function Configuration
                 $OutputPath = ".\$Name"
             }
 
-            # Load the default CIM keyword/function definitions set, populating the function collection
-            # with the default functions.
-            [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::LoadDefaultCimKeywords($functionsToDefine)
+            if (Test-DscKeywordCacheValid)
+            {
+                foreach ($item in $script:DscKeywordCacheState.DefaultFunctions.GetEnumerator())
+                {
+                    $functionsToDefine[$item.Key] = $item.Value
+                }
+                foreach ($keyword in $script:DscKeywordCacheState.KeywordSnapshot)
+                {
+                    [System.Management.Automation.Language.DynamicKeyword]::AddKeyword($keyword)
+                }
+            }
+            else
+            {
+                $script:DscKeywordCacheState.ImportedModules = @{}
+                [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::LoadDefaultCimKeywords($functionsToDefine)
+                Save-DscDefaultFunctionSnapshot -FunctionsToDefine $functionsToDefine
+            }
 
             # Set up the rest of the configuration runtime state.
             Initialize-ConfigurationRuntimeState $Name
@@ -2013,6 +2245,7 @@ function Configuration
             $functionsToDefine.Add('Get-PSMetaConfigDocumentInstVersionInfo', ${function:Get-PSMetaConfigDocumentInstVersionInfo} )
             $functionsToDefine.Add('Get-PSMetaConfigurationProcessed', ${function:Get-PSMetaConfigurationProcessed} )
             $functionsToDefine.Add('Set-PSMetaConfigVersionInfoV2', ${function:Set-PSMetaConfigVersionInfoV2})
+            $functionsToDefine.Add('Get-ComplexResourceQualifier', ${function:Get-ComplexResourceQualifier})
 
             #
             # Add the node keyword implementation function which must be module qualified even though
@@ -2043,9 +2276,29 @@ function Configuration
                 $modulesInfo = Get-Module -ListAvailable
             }
 
+            # Only import the highest (or requested) version of each module.
+            $modulesInfo = @($modulesInfo | Group-Object -Property Name | ForEach-Object -Process { $_.Group[0] })
+
             foreach ($mod in $modulesInfo) {
 
+                if (Import-CachedDscKeywords -Module $mod -Resources $res -FunctionsToDefine $functionsToDefine)
+                {
+                    continue
+                }
+
+                $keysBefore = New-Object -TypeName 'System.Collections.Generic.HashSet[string]' -ArgumentList @([string[]]@($functionsToDefine.Keys), [System.StringComparer]::OrdinalIgnoreCase)
+
                 $null = ImportClassResourcesFromModule -Module $mod -Resources $res -functionsToDefine $functionsToDefine
+
+                $driver = Get-CimKeywordImplementationFunction
+                foreach ($key in @($functionsToDefine.Keys))
+                {
+                    if (-not $keysBefore.Contains($key))
+                    {
+                        $functionsToDefine[$key] = $driver
+                    }
+                }
+
                 $dscResourcesPath = Join-Path -Path $mod.ModuleBase -ChildPath 'DscResources'
                 if(Test-Path $dscResourcesPath)
                 {
@@ -2064,6 +2317,8 @@ function Configuration
                         }
                     }
                 }
+
+                Save-ImportedDscModuleState -Module $mod -Resources $res -KeysBefore $keysBefore -FunctionsToDefine $functionsToDefine
             }
         }
 
@@ -2292,11 +2547,16 @@ function Configuration
     }
     finally
     {
+        if ($nestingPushed)
+        {
+            $script:ConfigurationNestingStack.RemoveAt($script:ConfigurationNestingStack.Count - 1)
+        }
         if($topLevel)
         {
             Write-Debug -Message "  CONFIGURATION $Name : DOING TOP-LEVEL CLEAN UP"
+            $script:DscKeywordCacheState.KeywordSnapshot = @([System.Management.Automation.Language.DynamicKeyword]::GetKeyword())
             [System.Management.Automation.Language.DynamicKeyword]::Reset()
-            [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ClearCache()
+            $script:ConfigurationNestingStack.Clear()
 
             Initialize-ConfigurationRuntimeState
         }
@@ -2537,10 +2797,7 @@ function ImportCimAndScriptKeywordsFromModule
 
 #
 # Writes a MOF document to disk with a deterministic encoding (UTF-8 without
-# BOM) on both Windows PowerShell 5.1 and PowerShell 7. The redirection
-# operator would write UTF-16 on 5.1 and UTF-8 on 7, producing different
-# bytes per edition. A trailing newline matches the redirection operator's
-# Out-File behavior so output stays byte-identical with previous releases.
+# BOM) on both Windows PowerShell 5.1 and PowerShell 7.
 #
 function Write-MofDocumentFile
 {
@@ -2806,8 +3063,8 @@ function Write-NodeMOFFile
         $mofNodeHash
     )
 
-    $nodeDoc = $null
-    $nodeMetaDoc = $null
+    $nodeDocBuilder = New-Object -TypeName System.Text.StringBuilder
+    $nodeMetaDocBuilder = New-Object -TypeName System.Text.StringBuilder
     $nodeConfigurationDocument = $null
     [int]$metaDocCount = 0
     [int]$nodeDocCount = 0
@@ -2826,9 +3083,9 @@ function Write-NodeMOFFile
     {
         if(($mofTypeName -notmatch 'MSFT_DSCMetaConfiguration'))
         {
-            if(($metaDocCount -gt 0) -and ($tempMetaDoc -match [regex]::Escape($mofTypeName)))
+            if(($metaDocCount -gt 0) -and ($tempMetaDoc.IndexOf($mofTypeName, [System.StringComparison]::OrdinalIgnoreCase) -ge 0))
             {
-                $nodeMetaDoc += $mofNodeHash[$mofTypeName]
+                $null = $nodeMetaDocBuilder.Append($mofNodeHash[$mofTypeName])
             }
             else
             {
@@ -2836,13 +3093,18 @@ function Write-NodeMOFFile
                 {
                     $nodeConfigurationDocument = $mofNodeHash[$mofTypeName]
                 }
-                $nodeDoc += $mofNodeHash[$mofTypeName]
+                $null = $nodeDocBuilder.Append($mofNodeHash[$mofTypeName])
                 $nodeDocCount++
             }
         }
     }
 
-    $nodeMetaDoc += $tempMetaDoc
+    if($metaDocCount -gt 0)
+    {
+        $null = $nodeMetaDocBuilder.Append($tempMetaDoc)
+    }
+    $nodeDoc = $nodeDocBuilder.ToString()
+    $nodeMetaDoc = $nodeMetaDocBuilder.ToString()
 
     $nodeOutfile = "$ConfigurationOutputDirectory/$($mofNode).mof"
     if($metaDocCount -gt 0)
@@ -4171,7 +4433,7 @@ function GetResourceFromKeyword
         Ascending  = $true
     }
     $resource.UpdateProperties($updatedProperties)
-    
+
     $resource | Add-Member -MemberType NoteProperty -Name 'ImplementationDetail' -Value $implementationDetail
 
     return $resource
