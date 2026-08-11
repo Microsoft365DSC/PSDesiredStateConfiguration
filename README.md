@@ -1,4 +1,4 @@
-# PSDesiredStateConfiguration (Microsoft365DSC fork)
+# M365DSC.PSDesiredStateConfiguration
 
 This is the [Microsoft365DSC](https://github.com/microsoft/Microsoft365DSC) fork of the
 [PowerShell/PSDesiredStateConfiguration](https://github.com/PowerShell/PSDesiredStateConfiguration) module:
@@ -32,20 +32,20 @@ binary DSC subsystem, and the build is a simple copy of the source tree.
 
 ## Quick start
 
-Import the module by path and put its parent directory on `PSModulePath`:
+Put the folder that holds both modules on `PSModulePath`, then import the engine by path:
 
 ```powershell
 $repo = 'C:\path\to\PSDesiredStateConfiguration'
 $env:PSModulePath = (Join-Path $repo 'src') + [System.IO.Path]::PathSeparator + $env:PSModulePath
-Import-Module (Join-Path $repo 'src\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1') -Force
+Import-Module (Join-Path $repo 'src\M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1') -Force
 ```
 
-> **Important:** the engine-compiled configuration body resolves `PSDesiredStateConfiguration\Configuration`
-> **by name through `PSModulePath` at invocation time**, even when the module is already imported.
-> The fork must therefore be discoverable via `PSModulePath` and be the highest version visible there.
-> If you only `Import-Module` by path without adjusting `PSModulePath`, plain configuration invocations
-> silently run through the inbox 1.1 module (Windows PowerShell 5.1) or the gallery 2.x module (PowerShell 7).
-> `Invoke-DscFastCompile` performs this correction automatically. Plain usage must do both steps above.
+> **Important:** both steps are required. Compiled configuration bodies call
+> `PSDesiredStateConfiguration\Configuration`, and the engine resolves that name through `PSModulePath`
+> while the configuration statement executes. The package therefore ships a small compatibility module
+> named `PSDesiredStateConfiguration` (same version) beside the engine, which forwards to it. Import the
+> engine without that folder on `PSModulePath` and compilation silently falls through to the inbox 1.1
+> module (Windows PowerShell 5.1) or the gallery 2.x module (PowerShell 7).
 
 Then compile a configuration as usual:
 
@@ -85,7 +85,7 @@ consumer contract are in [docs/FastHostContract.md](docs/FastHostContract.md).
 ### Schema cache resolution order
 
 1. `<ModuleBase>\DscSchemaCache.json` - shipped inside the resource module package.
-2. `%LOCALAPPDATA%\PSDesiredStateConfiguration\SchemaCache\<Name>_<Version>_<fingerprint>.json` - written after a live generation.
+2. `%LOCALAPPDATA%\M365DSC.PSDesiredStateConfiguration\SchemaCache\<Name>_<Version>_<fingerprint>.json` - written after a live generation.
 3. Live generation (then persisted to 2).
 
 A cache is used only when its module name, version, and fingerprint match the resolved module.
@@ -98,19 +98,23 @@ Measured compiling Microsoft365DSC configurations on a developer laptop; your nu
 | --- | --- | --- |
 | Baseline: inbox 1.1 (5.1) / gallery 2.0.7 (PS 7), parse + compile | 28 s + 38 s | 41 s + 55 s |
 | Fork, standard path, repeat compile in the same session | 2-4.5 s | 2-4.5 s |
-| Fork, fast host, fresh process | 6.6 s | 5.9 s |
-| Fork, fast host, repeat in the same session | 2.3 s | 2.1 s |
+| Fork, fast host, fresh process, warm cache | 7-20 s | 6-19 s |
+| Fork, fast host, repeat in the same session | 2-7 s | 2-5 s |
 
-One-time schema cache generation: ~17 s. The first standard-path compile in a fresh session still pays
-the full parse and import cost; the fast host avoids it.
+Fresh-process fast host figures vary with operating system file cache warmth: the run loads the
+multi-megabyte schema cache and registers about a thousand keywords. One-time schema cache generation
+costs 20-110 s depending on the same factor. The first standard-path compile in a fresh session still
+pays the full parse and import cost; the fast host avoids it.
 
 ## Coexistence with other PSDesiredStateConfiguration versions
 
 - Windows PowerShell 5.1 ships an inbox PSDesiredStateConfiguration 1.1 in `System32`; PowerShell 7
-  users typically install gallery 2.0.7. The fork (3.1.0) coexists with both.
-- Because `Configuration` resolves by name with highest-version-wins semantics, **never install the fork
-  in a `PSModulePath`-visible location with a lower version than the gallery module** - it would silently
-  lose the resolution race described above.
+  users typically install gallery 2.0.7. The engine module has its own name and never collides with them.
+- The bundled compatibility module does use the name `PSDesiredStateConfiguration`. Resolution is
+  highest-version-wins, so **never place it in a `PSModulePath`-visible location with a lower version
+  than an installed gallery module** - compilation would silently run through that module instead.
+- Put the compatibility module on `PSModulePath` only for sessions that compile configurations, rather
+  than installing it machine-wide, if you also use the gallery module for other work.
 
 ## Build
 
@@ -120,14 +124,14 @@ Requires the [`PSPackageProject`](https://www.powershellgallery.com/packages/PSP
 .\build.ps1 -Build -Clean
 ```
 
-The module is pure script, the build is a plain copy of `src\PSDesiredStateConfiguration` to
-`out\PSDesiredStateConfiguration`.
+The module is pure script, the build is a plain copy of `src\M365DSC.PSDesiredStateConfiguration` to
+`out\M365DSC.PSDesiredStateConfiguration` (plus the compatibility module to `out\PSDesiredStateConfiguration`).
 
 ## Tests
 
 Tests use **Pester 6**. The suites in `test\` are:
 
-- `PSDesiredStateConfiguration.Tests.ps1` - core module tests
+- `M365DSC.PSDesiredStateConfiguration.Tests.ps1` - core module tests
 - `FastHost.Tests.ps1` - `Invoke-DscFastCompile` behavior
 - `CacheRetention.Tests.ps1` - keyword cache retention across compiles
 - `SchemaCache.Tests.ps1` - schema cache export/validation

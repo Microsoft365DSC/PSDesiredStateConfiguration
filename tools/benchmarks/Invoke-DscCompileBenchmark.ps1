@@ -123,11 +123,18 @@ try
     if (Test-Path -Path $outRoot) { Remove-Item -Path $outRoot -Recurse -Force }
     $null = New-Item -ItemType Directory -Path $outRoot -Force
 
+    # The fork claims the engine-qualified Configuration name on import; without the
+    # import both fork rows would silently measure the inbox/gallery module.
+    if ($pathKind -ne 'builtin')
+    {
+        Import-Module -Name M365DSC.PSDesiredStateConfiguration -MinimumVersion 3.1 -Force
+    }
+
     if ($pathKind -eq 'fork-fasthost')
     {
         if ($state -eq 'cold')
         {
-            $cacheDir = Join-Path -Path ([System.Environment]::GetFolderPath('LocalApplicationData')) -ChildPath 'PSDesiredStateConfiguration\SchemaCache'
+            $cacheDir = Join-Path -Path ([System.Environment]::GetFolderPath('LocalApplicationData')) -ChildPath 'M365DSC.PSDesiredStateConfiguration\SchemaCache'
             if (Test-Path -Path $cacheDir)
             {
                 foreach ($m in $moduleNames)
@@ -136,7 +143,6 @@ try
                 }
             }
         }
-        Import-Module -Name PSDesiredStateConfiguration -MinimumVersion 3.0 -Force
         $out1 = Join-Path -Path $outRoot -ChildPath 'r1'
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         $null = Invoke-DscFastCompile -ScriptText $configText -ConfigurationName $configName -OutputPath $out1 -NoFallback

@@ -20,7 +20,7 @@ function Get-DscSchemaCacheUserPath
         $Fingerprint
     )
 
-    $root = Join-Path ([System.Environment]::GetFolderPath('LocalApplicationData')) 'PSDesiredStateConfiguration\SchemaCache'
+    $root = Join-Path ([System.Environment]::GetFolderPath('LocalApplicationData')) 'M365DSC.PSDesiredStateConfiguration\SchemaCache'
     $safeFingerprint = $Fingerprint.Replace(':', '_')
     Join-Path $root "${ModuleName}_${ModuleVersion}_${safeFingerprint}.json"
 }
@@ -184,7 +184,7 @@ function Export-DscSchemaCache
     $cache = @{
         formatVersion = $script:SchemaCacheFormatVersion
         generator     = @{
-            psdscVersion = (Get-Module PSDesiredStateConfiguration | Select-Object -First 1).Version.ToString()
+            psdscVersion = $ExecutionContext.SessionState.Module.Version.ToString()
             psVersion    = $PSVersionTable.PSVersion.ToString()
         }
         module        = @{

@@ -43,7 +43,7 @@ jobs:
 
           $configuration = New-PesterConfiguration
           $configuration.Run.Path = @(
-            (Join-Path $repo 'test\PSDesiredStateConfiguration.Tests.ps1'),
+            (Join-Path $repo 'test\M365DSC.PSDesiredStateConfiguration.Tests.ps1'),
             (Join-Path $repo 'test\FastHost.Tests.ps1'),
             (Join-Path $repo 'test\CacheRetention.Tests.ps1'),
             (Join-Path $repo 'test\SchemaCache.Tests.ps1')

@@ -22,16 +22,16 @@ $complexResourceQualifier = Get-ComplexResourceQualifier -IncludeCurrent
     function Test-DependsOn
     {
 
-# make sure the references are well-formed
+        # make sure the references are well-formed
         $updatedDependsOn = foreach ($DependsOnVar in $value['DependsOn']) {
-# match [ResourceType]ResourceName. ResourceName should starts with [a-z_0-9] followed by [a-z_0-9\p{Zs}\.\\-]*
+        # match [ResourceType]ResourceName. ResourceName should starts with [a-z_0-9] followed by [a-z_0-9\p{Zs}\.\\-]*
             if ($DependsOnVar -notmatch '^\[[a-z]\w*\][a-z_0-9][a-z_0-9\p{Zs}\.\\-]*$')
             {
                 Update-ConfigurationErrorCount
                 Write-Error -ErrorRecord ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::GetBadlyFormedRequiredResourceIdErrorRecord($DependsOnVar, $resourceId))
             }
 
-# Fix up DependsOn for nested names
+            # Fix up DependsOn for nested names
             if ($MyTypeName -and $typeName -ne $MyTypeName -and $InstanceName)
             {
                 "$DependsOnVar::$complexResourceQualifier"
@@ -46,22 +46,20 @@ $complexResourceQualifier = Get-ComplexResourceQualifier -IncludeCurrent
 
         if($null -ne $DependsOn)
         {
-#
-# Combine DependsOn with dependson from outer composite resource
-# which is set as local variable $DependsOn at the composite resource context
-#
+            # Combine DependsOn with dependson from outer composite resource
+            # which is set as local variable $DependsOn at the composite resource context
             $value['DependsOn']= @($value['DependsOn']) + $DependsOn
         }
 
-# Save the resource id in a per-node dictionary to do cross validation at the end
+        # Save the resource id in a per-node dictionary to do cross validation at the end
         Set-NodeResources $resourceId @( $value['DependsOn'])
 
-# Remove depends on because it need to be fixed up for composite resources
-# We do it in ValidateNodeResource and Update-Depends on in configuration/Node function
+        # Remove depends on because it need to be fixed up for composite resources
+        # We do it in ValidateNodeResource and Update-Depends on in configuration/Node function
         $value.Remove('DependsOn')
     }
 
-# A copy of the value object with correctly-cased property names
+    # A copy of the value object with correctly-cased property names
     $canonicalizedValue = @{}
 
     $typeName = $keywordData.ResourceName # CIM type
@@ -71,15 +69,15 @@ $complexResourceQualifier = Get-ComplexResourceQualifier -IncludeCurrent
 
     Write-Debug "${debugPrefix} RESOURCE PROCESSING STARTED [KeywordName='$keywordName'] Function='$($myinvocation.Invocationname)']"
 
-# Check whether it's an old style metaconfig
+    # Check whether it's an old style metaconfig
     $OldMetaConfig = $false
     if ((-not $IsMetaConfig) -and ($keywordName -ieq 'LocalConfigurationManager')) {
         $OldMetaConfig = $true
     }
 
-# Check to see if it's a resource keyword. If so add the meta-properties to the canonical property collection.
+    # Check to see if it's a resource keyword. If so add the meta-properties to the canonical property collection.
     $resourceId = $null
-# todo: need to include configuration managers and partial configuration
+    # todo: need to include configuration managers and partial configuration
     if (($keywordData.Properties.Keys -contains 'DependsOn') -or (($KeywordData.ImplementingModule -ieq 'PSDesiredStateConfigurationEngine') -and ($KeywordData.NameMode -eq [System.Management.Automation.Language.DynamicKeywordNameMode]::NameRequired)))
     {
 
@@ -91,7 +89,7 @@ $complexResourceQualifier = Get-ComplexResourceQualifier -IncludeCurrent
 
         Write-Debug "${debugPrefix} ResourceID = $resourceId"
 
-# copy the meta-properties
+    # copy the meta-properties
         $canonicalizedValue['ResourceID'] = $resourceId
         $canonicalizedValue['SourceInfo'] = $SourceMetadata
         if(-not $IsMetaConfig)
@@ -100,7 +98,7 @@ $complexResourceQualifier = Get-ComplexResourceQualifier -IncludeCurrent
             $canonicalizedValue['ModuleVersion'] = $keywordData.ImplementingModuleVersion -as [string]
         }
 
-# see if there is already a resource with this ID.
+        # see if there is already a resource with this ID.
         if (Test-NodeResources $resourceId)
         {
             Update-ConfigurationErrorCount
@@ -108,41 +106,41 @@ $complexResourceQualifier = Get-ComplexResourceQualifier -IncludeCurrent
         }
         else
         {
-# If there are prerequisite resources, validate that the references are well-formed strings
-# This routine also adds the resource to the global node resources table.
+            # If there are prerequisite resources, validate that the references are well-formed strings
+            # This routine also adds the resource to the global node resources table.
             Test-DependsOn
 
-# Check if PsDscRunCredential is being specified as Arguments to Configuration
+        # Check if PsDscRunCredential is being specified as Arguments to Configuration
         if($null -ne $PsDscRunAsCredential)
         {
-# Check if resource is also trying to set the value for RunAsCred
-# In that case we will generate error during compilation, this is merge error
+        # Check if resource is also trying to set the value for RunAsCred
+        # In that case we will generate error during compilation, this is merge error
         if($null -ne $value['PsDscRunAsCredential'])
         {
             Update-ConfigurationErrorCount
             Write-Error -ErrorRecord ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::PsDscRunAsCredentialMergeErrorForCompositeResources($resourceId))
         }
-# Set the Value of RunAsCred to that of outer configuration
+        # Set the Value of RunAsCred to that of outer configuration
         else
         {
             $value['PsDscRunAsCredential'] = $PsDscRunAsCredential
         }
     }
 
-# Save the resource id in a per-node dictionary to do cross validation at the end
+            # Save the resource id in a per-node dictionary to do cross validation at the end
             if($keywordData.ImplementingModule -ieq "PSDesiredStateConfigurationEngine")
             {
-#$keywordName is PartialConfiguration
+                #$keywordName is PartialConfiguration
                 if($keywordName -eq 'PartialConfiguration')
                 {
-# RefreshMode is 'Pull' and .ConfigurationSource is empty
+                    # RefreshMode is 'Pull' and .ConfigurationSource is empty
                     if($value['RefreshMode'] -eq 'Pull' -and -not $value['ConfigurationSource'])
                     {
                         Update-ConfigurationErrorCount
                         Write-Error -ErrorRecord ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::GetPullModeNeedConfigurationSource($resourceId))
                     }
 
-# Verify that RefreshMode is not Disabled for Partial configuration
+                    # Verify that RefreshMode is not Disabled for Partial configuration
                     if($value['RefreshMode'] -eq 'Disabled')
                     {
                         Update-ConfigurationErrorCount
@@ -162,7 +160,7 @@ $complexResourceQualifier = Get-ComplexResourceQualifier -IncludeCurrent
 
                 if($null -ne $value['ExclusiveResources'])
                 {
-# make sure the references are well-formed
+                    # make sure the references are well-formed
                     foreach ($ExclusiveResource in $value['ExclusiveResources']) {
                         if (($ExclusiveResource -notmatch '^[a-z][a-z_0-9]*\\[a-z][a-z_0-9]*$') -and ($ExclusiveResource -notmatch '^[a-z][a-z_0-9]*$') -and ($ExclusiveResource -notmatch '^[a-z][a-z_0-9]*\\\*$'))
                         {
@@ -171,9 +169,9 @@ $complexResourceQualifier = Get-ComplexResourceQualifier -IncludeCurrent
                         }
                     }
 
-# Save the resource id in a per-node dictionary to do cross validation at the end
-# Validate resource exist
-# Also update the resource reference from module\friendlyname to module\name
+                    # Save the resource id in a per-node dictionary to do cross validation at the end
+                    # Validate resource exist
+                    # Also update the resource reference from module\friendlyname to module\name
                     $value['ExclusiveResources'] = @(Set-NodeExclusiveResources $resourceId @( $value['ExclusiveResources'] ))
                 }
             }
@@ -184,9 +182,7 @@ $complexResourceQualifier = Get-ComplexResourceQualifier -IncludeCurrent
         Write-Debug "${debugPrefix} TYPE IS NOT AS DSC RESOURCE"
     }
 
-#
-# Copy the user-supplied values into a new collection with canonicalized property names
-#
+    # Copy the user-supplied values into a new collection with canonicalized property names
     foreach ($key in $keywordData.Properties.Keys)
     {
         Write-Debug "${debugPrefix} Processing property '$key' ["
@@ -198,9 +194,9 @@ $complexResourceQualifier = Get-ComplexResourceQualifier -IncludeCurrent
                 Write-Error -ErrorRecord ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::InvalidLocalConfigurationManagerPropertyErrorRecord($key, ($V1MetaConfigPropertyList -join ', ')))
                 Update-ConfigurationErrorCount
             }
-# see if there is a list of allowed values for this property (similar to an enum)
+            # see if there is a list of allowed values for this property (similar to an enum)
             $allowedValues = $keywordData.Properties[$key].Values
-# If there is and user-provided value is not in that list, write an error.
+            # If there is and user-provided value is not in that list, write an error.
             if ($allowedValues)
             {
                 if(($null -eq $value[$key]) -and ($allowedValues -notcontains $value[$key]))
@@ -228,7 +224,7 @@ $complexResourceQualifier = Get-ComplexResourceQualifier -IncludeCurrent
                 }
             }
 
-# see if a value range is defined for this property
+            # see if a value range is defined for this property
             $allowedRange = $keywordData.Properties[$key].Range
             if($allowedRange)
             {
@@ -254,9 +250,9 @@ $complexResourceQualifier = Get-ComplexResourceQualifier -IncludeCurrent
                 }
             }
 
-# see if ValueMap is also defined for this property (actual values)
+            # see if ValueMap is also defined for this property (actual values)
             $allowedValueMap = $keywordData.Properties[$key].ValueMap
-#if it is and the ValueMap contains the user-provided value as a key, use the actual value
+            #if it is and the ValueMap contains the user-provided value as a key, use the actual value
             if ($allowedValueMap -and $allowedValueMap.ContainsKey($value[$key]))
             {
                 $canonicalizedValue[$key] = $allowedValueMap[$value[$key]]
@@ -268,7 +264,7 @@ $complexResourceQualifier = Get-ComplexResourceQualifier -IncludeCurrent
         }
         elseif ($keywordData.Properties[$key].Mandatory)
         {
-# If the property was mandatory but the user didn't provide a value, write and error.
+            # If the property was mandatory but the user didn't provide a value, write and error.
             Write-Error -ErrorRecord ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::MissingValueForMandatoryPropertyErrorRecord($keywordData.Keyword, $keywordData.Properties[$key].TypeConstraint, $Key))
             Update-ConfigurationErrorCount
         }
@@ -283,7 +279,7 @@ $complexResourceQualifier = Get-ComplexResourceQualifier -IncludeCurrent
         Test-ConflictingResources $keywordName $canonicalizedValue $keywordData
     }
 
-# update OMI_ConfigurationDocument
+    # update OMI_ConfigurationDocument
     if($IsMetaConfig)
     {
         if($keywordData.ResourceName -eq 'OMI_ConfigurationDocument')
@@ -321,20 +317,20 @@ $complexResourceQualifier = Get-ComplexResourceQualifier -IncludeCurrent
     {
         if($canonicalizedValue['DebugMode'] -and @($canonicalizedValue['DebugMode']).Length -gt 1)
         {
-# we only allow one value for debug mode now.
+            # we only allow one value for debug mode now.
             Write-Error -ErrorRecord ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::DebugModeShouldHaveOneValue())
             Update-ConfigurationErrorCount
         }
     }
 
-# Generate the MOF text for this resource instance.
-# when generate mof text for OMI_ConfigurationDocument we handle below two cases:
-# 1. we will add versioning related property based on meta configuration instance already process
-# 2. we update the existing OMI_ConfigurationDocument instance if it already exists when process meta configuration instance
+    # Generate the MOF text for this resource instance.
+    # when generate mof text for OMI_ConfigurationDocument we handle below two cases:
+    # 1. we will add versioning related property based on meta configuration instance already process
+    # 2. we update the existing OMI_ConfigurationDocument instance if it already exists when process meta configuration instance
     $aliasId = ConvertTo-MOFInstance $keywordName $canonicalizedValue
 
-# If a OMI_ConfigurationDocument is executed outside of a node statement, it becomes the default
-# for all nodes that don't have an explicit OMI_ConfigurationDocument declaration
+    # If a OMI_ConfigurationDocument is executed outside of a node statement, it becomes the default
+    # for all nodes that don't have an explicit OMI_ConfigurationDocument declaration
     if ($keywordData.ResourceName -eq 'OMI_ConfigurationDocument' -and -not (Get-PSCurrentConfigurationNode))
     {
         $data = Get-MoFInstanceText $aliasId
@@ -344,9 +340,7 @@ $complexResourceQualifier = Get-ComplexResourceQualifier -IncludeCurrent
 
     Write-Debug "${debugPrefix} MOF alias for this resource is '$aliasId'"
 
-# always return the aliasId so the generated file will be well-formed if not valid
+    # always return the aliasId so the generated file will be well-formed if not valid
     $aliasId
 
     Write-Debug "${debugPrefix} RESOURCE PROCESSING COMPLETED. TOTAL ERROR COUNT: $(Get-ConfigurationErrorCount)"
-
-    

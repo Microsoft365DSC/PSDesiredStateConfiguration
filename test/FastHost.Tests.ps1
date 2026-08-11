@@ -2,18 +2,19 @@ BeforeAll {
     $script:PSDscTestRoot = $PSScriptRoot
     $script:PSDscRepoRoot = Split-Path $PSScriptRoot -Parent
     $script:PSDscModuleUnderTestManifest = @(
-        (Join-Path $script:PSDscRepoRoot 'out\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1')
-        (Join-Path $script:PSDscRepoRoot 'src\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1')
+        (Join-Path $script:PSDscRepoRoot 'out\M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
+        (Join-Path $script:PSDscRepoRoot 'src\M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
     function Import-PSDscModuleUnderTest
     {
-        Get-Module -Name PSDesiredStateConfiguration | Remove-Module -Force
+        Get-Module -Name M365DSC.PSDesiredStateConfiguration | Remove-Module -Force
         Import-Module $script:PSDscModuleUnderTestManifest -Force
     }
 
-    # The engine resolves PSDesiredStateConfiguration by name through PSModulePath when a
-    # compiled configuration runs, so the module under test must win that resolution.
+    # Test resource modules are resolved by name at parse time, so TestModules must be
+    # on the path. The module under test claims the engine-qualified Configuration name
+    # itself when imported, so its own location only matters for out-of-process runs.
     $script:PSDscOriginalPSModulePath = $env:PSModulePath
     $moduleParent = Split-Path (Split-Path $script:PSDscModuleUnderTestManifest -Parent) -Parent
     $separator = [System.IO.Path]::PathSeparator
@@ -23,7 +24,7 @@ BeforeAll {
     {
         param ([string]$Text)
 
-        & (Get-Module -Name PSDesiredStateConfiguration) { Get-StrippedConfigurationText -Text $args[0] } $Text
+        & (Get-Module -Name M365DSC.PSDesiredStateConfiguration) { Get-StrippedConfigurationText -Text $args[0] } $Text
     }
 
     # SourceInfo carries source line numbers, which shift when the fast host merges a
@@ -50,8 +51,40 @@ AfterAll {
 
 Describe 'Fast host contract' {
     It 'uses the PSDscFastCompileActive recursion guard global consumed by Microsoft365DSC trailers' {
-        $fastHostText = [System.IO.File]::ReadAllText((Join-Path $script:PSDscRepoRoot 'src\PSDesiredStateConfiguration\FastHost.ps1'))
+        $fastHostText = [System.IO.File]::ReadAllText((Join-Path $script:PSDscRepoRoot 'src\M365DSC.PSDesiredStateConfiguration\FastHost.ps1'))
         $fastHostText | Should -Match '\$Global:PSDscFastCompileActive'
+    }
+
+    It 'ships a compatibility module of the same version that claims the engine-resolved name' {
+        $compatManifest = Join-Path $script:PSDscRepoRoot 'src\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1'
+        Test-Path $compatManifest | Should -Be $true
+        $compat = Import-PowerShellDataFile -Path $compatManifest
+        $engine = Import-PowerShellDataFile -Path $script:PSDscModuleUnderTestManifest
+        $compat.ModuleVersion | Should -Be $engine.ModuleVersion
+        (Get-Command 'PSDesiredStateConfiguration\Configuration').Module.Name | Should -Be 'M365DSC.PSDesiredStateConfiguration'
+    }
+
+    It 'keeps compiling through this engine after a standard compile loaded the inbox module' {
+        $text = @'
+Configuration ShimHandoverCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        ResourceForTests1 a
+        {
+            Prop1 = 'handover'
+        }
+    }
+}
+'@
+        Invoke-Expression $text
+        $null = ShimHandoverCfg -OutputPath (Join-Path $TestDrive 'handover-std')
+
+        $result = Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'handover-fast') -NoFallback
+        $result.Exists | Should -Be $true
+        (Get-Content -Path $result.FullName -Raw) | Should -Match 'Prop1 = "handover"'
+        (Get-Command 'PSDesiredStateConfiguration\Configuration').Module.Name | Should -Be 'M365DSC.PSDesiredStateConfiguration'
     }
 }
 

@@ -1,9 +1,9 @@
 {
   "HelpPath": "help",
-  "ModuleName": "PSDesiredStateConfiguration",
+  "ModuleName": "M365DSC.PSDesiredStateConfiguration",
   "BuildOutputPath": "out",
   "SignedOutputPath": "signed",
-  "SourcePath": "src/PSDesiredStateConfiguration",
+  "SourcePath": "src/M365DSC.PSDesiredStateConfiguration",
   "TestPath": "test",
   "Culture": "en-US"
 }

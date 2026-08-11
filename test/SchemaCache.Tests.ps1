@@ -2,13 +2,13 @@ BeforeAll {
     $script:PSDscTestRoot = $PSScriptRoot
     $script:PSDscRepoRoot = Split-Path $PSScriptRoot -Parent
     $script:PSDscModuleUnderTestManifest = @(
-        (Join-Path $script:PSDscRepoRoot 'out\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1')
-        (Join-Path $script:PSDscRepoRoot 'src\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1')
+        (Join-Path $script:PSDscRepoRoot 'out\M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
+        (Join-Path $script:PSDscRepoRoot 'src\M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
     function Import-PSDscModuleUnderTest
     {
-        Get-Module -Name PSDesiredStateConfiguration | Remove-Module -Force
+        Get-Module -Name M365DSC.PSDesiredStateConfiguration | Remove-Module -Force
         Import-Module $script:PSDscModuleUnderTestManifest -Force
     }
 
@@ -21,7 +21,7 @@ BeforeAll {
     {
         param ($SchemaObject)
 
-        & (Get-Module -Name PSDesiredStateConfiguration) { ConvertFrom-DscKeywordSchemaObject -SchemaObject $args[0] } $SchemaObject
+        & (Get-Module -Name M365DSC.PSDesiredStateConfiguration) { ConvertFrom-DscKeywordSchemaObject -SchemaObject $args[0] } $SchemaObject
     }
 
     Import-PSDscModuleUnderTest

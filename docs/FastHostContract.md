@@ -1,6 +1,17 @@
 # Fast Host Contract
 
-Interface between this module (>= 3.1.0, PSData tag `M365DSCFastHost`) and consumers such as Microsoft365DSC tooling.
+Interface between this module (`M365DSC.PSDesiredStateConfiguration` >= 3.1.0, PSData tag `M365DSCFastHost`) and consumers such as Microsoft365DSC tooling.
+
+## Module layout
+
+The package contains two modules:
+
+| Folder | Purpose |
+|---|---|
+| `M365DSC.PSDesiredStateConfiguration` | The engine: compiler, fast host, schema cache. Import this one. |
+| `PSDesiredStateConfiguration` | A compatibility module of the same version that re-exports the engine's commands. |
+
+The compatibility module exists because the PowerShell engine resolves the module named `PSDesiredStateConfiguration` while it executes a `Configuration ... { }` statement, and that module then owns the qualified `PSDesiredStateConfiguration\Configuration` call every compiled configuration body makes. Without it, compilation silently falls through to the inbox 1.1 (Windows PowerShell) or gallery 2.x (PowerShell 7) module. Its parent folder must therefore be on `PSModulePath` because it reuses an already-loaded engine instance rather than importing a second one.
 
 ## Commands
 
@@ -97,4 +108,4 @@ Consumers must reject caches with a `formatVersion` greater than the one they kn
 
 ## Module resolution requirement
 
-The engine-compiled configuration body resolves `PSDesiredStateConfiguration\Configuration` **by name through PSModulePath** at invocation time, even when a module with that name is already imported. This module must therefore be discoverable via `PSModulePath` with the highest version; `Invoke-DscFastCompile` prepends its own parent directory to `PSModulePath` automatically when needed. Consumers importing the module by path must do the same, or plain configuration invocations will silently run through the inbox 1.1 (Windows PowerShell) or gallery 2.x (PowerShell 7) module.
+Compiled configuration bodies call `PSDesiredStateConfiguration\Configuration`, and the engine resolves that name **through PSModulePath while the configuration statement executes**. Consumers must therefore put the folder holding both modules on `PSModulePath` (Microsoft365DSC's `Import-M365DSCDscEngine` prepends its `Dependencies` folder), then import `M365DSC.PSDesiredStateConfiguration` by path. Importing the engine alone without the compatibility module on the path is not enough, the first compile succeeds through the engine's in-session claim of that function name, but a later one silently reverts to the inbox or gallery module.

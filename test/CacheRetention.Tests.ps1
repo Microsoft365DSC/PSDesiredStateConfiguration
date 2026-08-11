@@ -2,13 +2,13 @@ BeforeAll {
     $script:PSDscTestRoot = $PSScriptRoot
     $script:PSDscRepoRoot = Split-Path $PSScriptRoot -Parent
     $script:PSDscModuleUnderTestManifest = @(
-        (Join-Path $script:PSDscRepoRoot 'out\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1')
-        (Join-Path $script:PSDscRepoRoot 'src\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1')
+        (Join-Path $script:PSDscRepoRoot 'out\M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
+        (Join-Path $script:PSDscRepoRoot 'src\M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
     function Import-PSDscModuleUnderTest
     {
-        Get-Module -Name PSDesiredStateConfiguration | Remove-Module -Force
+        Get-Module -Name M365DSC.PSDesiredStateConfiguration | Remove-Module -Force
         Import-Module $script:PSDscModuleUnderTestManifest -Force
     }
 
@@ -73,8 +73,8 @@ Configuration RetentionTimingCfg
         # For a module this small, cold import and warm replay cost about the same, so a
         # timing ratio is noise; retention is asserted through the module state instead.
         # Large-module ratios are covered by tools\benchmarks.
-        & (Get-Module PSDesiredStateConfiguration) { Test-DscKeywordCacheValid } | Should -Be $true
-        & (Get-Module PSDesiredStateConfiguration) { $script:DscKeywordCacheState.ImportedModules.Keys -contains 'xTestClassResource' } | Should -Be $true
+        & (Get-Module M365DSC.PSDesiredStateConfiguration) { Test-DscKeywordCacheValid } | Should -Be $true
+        & (Get-Module M365DSC.PSDesiredStateConfiguration) { $script:DscKeywordCacheState.ImportedModules.Keys -contains 'xTestClassResource' } | Should -Be $true
         $secondDuration.TotalMilliseconds | Should -BeLessThan ([math]::Max($firstDuration.TotalMilliseconds * 1.5, 1500))
     }
 

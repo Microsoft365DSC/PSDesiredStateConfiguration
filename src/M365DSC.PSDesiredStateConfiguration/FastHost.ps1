@@ -369,13 +369,7 @@ function Invoke-DscFastCompile
         $ScriptText = [System.IO.File]::ReadAllText($Path)
     }
 
-    $moduleRoot = $PSScriptRoot
-    $moduleParent = Split-Path $moduleRoot -Parent
-    $resolved = Get-Module -ListAvailable -Name PSDesiredStateConfiguration | Sort-Object -Property Version -Descending | Select-Object -First 1
-    if (-not $resolved -or $resolved.ModuleBase -ne $moduleRoot)
-    {
-        $env:PSModulePath = $moduleParent + [System.IO.Path]::PathSeparator + $env:PSModulePath
-    }
+    Assert-DscConfigurationShim
 
     $fallbackReason = $null
     $stripResult = Get-StrippedConfigurationText -Text $ScriptText
@@ -500,6 +494,11 @@ function Invoke-DscFastCompileBody
     )
 
     $scriptBlock = [scriptblock]::Create($Text)
+
+    # Parsing the configuration statement makes the engine load the inbox module by
+    # file path, which takes the qualified Configuration name over.
+    Assert-DscConfigurationShim
+
     $pushed = $false
     if ($ScriptPath)
     {

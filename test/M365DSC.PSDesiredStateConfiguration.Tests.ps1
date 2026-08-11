@@ -5,13 +5,13 @@ BeforeAll {
     $script:PSDscTestRoot = $PSScriptRoot
     $script:PSDscRepoRoot = Split-Path $PSScriptRoot -Parent
     $script:PSDscModuleUnderTest = @(
-        (Join-Path $script:PSDscRepoRoot 'out\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1')
-        (Join-Path $script:PSDscRepoRoot 'src\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1')
+        (Join-Path $script:PSDscRepoRoot 'out\M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
+        (Join-Path $script:PSDscRepoRoot 'src\M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
     function Import-ModuleUnderTest
     {
-        Get-Module -Name PSDesiredStateConfiguration | Remove-Module -Force
+        Get-Module -Name M365DSC.PSDesiredStateConfiguration | Remove-Module -Force
         Import-Module $script:PSDscModuleUnderTest -Force
     }
 
@@ -42,8 +42,7 @@ BeforeAll {
         }
     }
 
-    # Compiled configurations resolve PSDesiredStateConfiguration and the test resource
-    # modules by name through PSModulePath, so the module under test must win resolution.
+    # Compiled configurations resolve resource modules by name through PSModulePath.
     $script:PSDscOriginalPSModulePath = $env:PSModulePath
     $moduleParent = Split-Path (Split-Path $script:PSDscModuleUnderTest -Parent) -Parent
     $separator = [System.IO.Path]::PathSeparator
@@ -57,11 +56,11 @@ AfterAll {
     }
 }
 
-Describe "Test PSDesiredStateConfiguration" {
+Describe "Test M365DSC.PSDesiredStateConfiguration" {
     Context "Module loading" {
         BeforeAll {
             Import-ModuleUnderTest
-            $script:commands = Get-Command -Module PSDesiredStateConfiguration
+            $script:commands = Get-Command -Module M365DSC.PSDesiredStateConfiguration
         }
 
         It "The module should have the <CommandName> command" -TestCases @(
