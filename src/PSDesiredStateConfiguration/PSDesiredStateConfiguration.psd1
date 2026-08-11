@@ -9,10 +9,10 @@
 RootModule = 'PSDesiredStateConfiguration.psm1'
 
 # Version number of this module.
-moduleVersion = '2.0.7'
+moduleVersion = '3.1.0'
 
 # Supported PSEditions
-CompatiblePSEditions = @('Core')
+CompatiblePSEditions = @('Desktop', 'Core')
 
 # ID used to uniquely identify this module
 GUID = '779e0998-8c72-4567-89b5-49313fc15351'
@@ -30,7 +30,7 @@ Copyright = '(c) Microsoft Corporation. All rights reserved.'
 Description = 'PowerShell Desired State Configuration'
 
 # Minimum version of the Windows PowerShell engine required by this module
-PowerShellVersion = '6.1'
+PowerShellVersion = '5.1'
 
 # Name of the Windows PowerShell host required by this module
 # PowerShellHostName = ''
@@ -101,10 +101,9 @@ HelpInfoURI = 'https://go.microsoft.com/fwlink/?linkid=2113535'
 PrivateData = @{
     PSData = @{
         Tags         = @('PSDesiredStateConfiguration',
-            'Linux',
-            'Mac',
+            'M365DSCFastHost',
             'Windows')
-        ProjectUri   = 'https://github.com/PowerShell/PSDesiredStateConfiguration'
+        ProjectUri   = 'https://github.com/Microsoft365DSC/PSDesiredStateConfiguration'
     }
 }
 }
