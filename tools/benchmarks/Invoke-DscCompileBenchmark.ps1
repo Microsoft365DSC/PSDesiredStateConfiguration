@@ -30,8 +30,9 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 
 $repoRoot = Split-Path -Path (Split-Path -Path $PSScriptRoot -Parent) -Parent
-$srcParent = Join-Path -Path $repoRoot -ChildPath 'src'
+$srcParent = Join-Path -Path $repoRoot -ChildPath 'M365DSC.PSDesiredStateConfiguration\Compat'
 $testModules = Join-Path -Path $repoRoot -ChildPath 'test\TestModules'
+$engineManifest = Join-Path -Path $repoRoot -ChildPath 'M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1'
 foreach ($required in @($srcParent, $testModules))
 {
     if (-not (Test-Path -Path $required))
@@ -97,6 +98,7 @@ $sep = [System.IO.Path]::PathSeparator
 $pathKind = '__PATHKIND__'
 $state = '__STATE__'
 $srcParent = '__SRCPARENT__'
+$engineManifest = '__ENGINEMANIFEST__'
 $testModules = '__TESTMODULES__'
 $outRoot = '__OUTROOT__'
 $configName = '__CONFIGNAME__'
@@ -127,7 +129,7 @@ try
     # import both fork rows would silently measure the inbox/gallery module.
     if ($pathKind -ne 'builtin')
     {
-        Import-Module -Name M365DSC.PSDesiredStateConfiguration -MinimumVersion 3.1 -Force
+        Import-Module -Name $engineManifest -Force
     }
 
     if ($pathKind -eq 'fork-fasthost')
@@ -245,6 +247,7 @@ try
                 $childScript = $childScript.Replace('__PATHKIND__', $currentPath)
                 $childScript = $childScript.Replace('__STATE__', $currentState)
                 $childScript = $childScript.Replace('__SRCPARENT__', (ConvertTo-SingleQuoted -Value $srcParent))
+$childScript = $childScript.Replace('__ENGINEMANIFEST__', (ConvertTo-SingleQuoted -Value $engineManifest))
                 $childScript = $childScript.Replace('__TESTMODULES__', (ConvertTo-SingleQuoted -Value $testModules))
                 $childScript = $childScript.Replace('__OUTROOT__', (ConvertTo-SingleQuoted -Value $outRoot))
                 $childScript = $childScript.Replace('__CONFIGNAME__', (ConvertTo-SingleQuoted -Value $configName))

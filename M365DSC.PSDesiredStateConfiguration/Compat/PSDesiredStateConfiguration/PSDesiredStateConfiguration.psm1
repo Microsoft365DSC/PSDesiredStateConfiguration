@@ -11,10 +11,12 @@ function Resolve-EngineManifest
     [OutputType([string])]
     param()
 
-    # Flat layout (<root>\PSDesiredStateConfiguration) and versioned layout
-    # (<root>\PSDesiredStateConfiguration\<version>) both place the engine beside
-    # this module, one or two levels up.
+    # This module ships inside the engine, at <engineRoot>\Compat\PSDesiredStateConfiguration,
+    # so the engine manifest sits two levels up. The sibling layouts are kept as fallbacks for
+    # installations that place the two modules next to each other.
+    $engineRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
     $candidates = @(
+        (Join-Path $engineRoot "$script:EngineModuleName.psd1")
         (Join-Path (Split-Path $PSScriptRoot -Parent) "$script:EngineModuleName\$script:EngineModuleName.psd1")
         (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) "$script:EngineModuleName\$(Split-Path $PSScriptRoot -Leaf)\$script:EngineModuleName.psd1")
     )

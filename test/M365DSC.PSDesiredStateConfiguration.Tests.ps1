@@ -5,8 +5,7 @@ BeforeAll {
     $script:PSDscTestRoot = $PSScriptRoot
     $script:PSDscRepoRoot = Split-Path $PSScriptRoot -Parent
     $script:PSDscModuleUnderTest = @(
-        (Join-Path $script:PSDscRepoRoot 'out\M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
-        (Join-Path $script:PSDscRepoRoot 'src\M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
+        (Join-Path $script:PSDscRepoRoot 'M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
     function Import-ModuleUnderTest
@@ -44,9 +43,9 @@ BeforeAll {
 
     # Compiled configurations resolve resource modules by name through PSModulePath.
     $script:PSDscOriginalPSModulePath = $env:PSModulePath
-    $moduleParent = Split-Path (Split-Path $script:PSDscModuleUnderTest -Parent) -Parent
+    $compatRoot = Join-Path (Split-Path $script:PSDscModuleUnderTest -Parent) 'Compat'
     $separator = [System.IO.Path]::PathSeparator
-    $env:PSModulePath = (Join-Path $script:PSDscTestRoot 'TestModules') + $separator + $moduleParent + $separator + $env:PSModulePath
+    $env:PSModulePath = (Join-Path $script:PSDscTestRoot 'TestModules') + $separator + $compatRoot + $separator + $env:PSModulePath
 }
 
 AfterAll {

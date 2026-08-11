@@ -32,20 +32,20 @@ binary DSC subsystem, and the build is a simple copy of the source tree.
 
 ## Quick start
 
-Put the folder that holds both modules on `PSModulePath`, then import the engine by path:
+Put the engine's `Compat` folder on `PSModulePath`, then import the engine by path:
 
 ```powershell
 $repo = 'C:\path\to\PSDesiredStateConfiguration'
-$env:PSModulePath = (Join-Path $repo 'src') + [System.IO.Path]::PathSeparator + $env:PSModulePath
-Import-Module (Join-Path $repo 'src\M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1') -Force
+$env:PSModulePath = (Join-Path $repo 'M365DSC.PSDesiredStateConfiguration\Compat') + [System.IO.Path]::PathSeparator + $env:PSModulePath
+Import-Module (Join-Path $repo 'M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1') -Force
 ```
 
 > **Important:** both steps are required. Compiled configuration bodies call
 > `PSDesiredStateConfiguration\Configuration`, and the engine resolves that name through `PSModulePath`
 > while the configuration statement executes. The package therefore ships a small compatibility module
-> named `PSDesiredStateConfiguration` (same version) beside the engine, which forwards to it. Import the
-> engine without that folder on `PSModulePath` and compilation silently falls through to the inbox 1.1
-> module (Windows PowerShell 5.1) or the gallery 2.x module (PowerShell 7).
+> named `PSDesiredStateConfiguration` (same version) under the engine's `Compat` folder, which forwards
+> to it. Import the engine without that folder on `PSModulePath` and compilation silently falls through
+> to the inbox 1.1 module (Windows PowerShell 5.1) or the gallery 2.x module (PowerShell 7).
 
 Then compile a configuration as usual:
 
@@ -80,7 +80,8 @@ Clear-DscKeywordCache
 
 Scripts that use script-based or composite resources automatically fall back to the standard
 compilation path (use `-NoFallback` to fail instead). Full command reference, cache format, and the
-consumer contract are in [docs/FastHostContract.md](docs/FastHostContract.md).
+consumer contract are in [docs/FastHostContract.md](docs/FastHostContract.md); how the compiler and the
+fast host work, with diagrams, is in [docs/Architecture.md](docs/Architecture.md).
 
 ### Schema cache resolution order
 
@@ -118,14 +119,13 @@ pays the full parse and import cost; the fast host avoids it.
 
 ## Build
 
-Requires the [`PSPackageProject`](https://www.powershellgallery.com/packages/PSPackageProject) module.
+The module is pure script and is published straight from the `M365DSC.PSDesiredStateConfiguration`
+folder, so there is nothing to compile. One script validates it:
 
 ```powershell
-.\build.ps1 -Build -Clean
+.\Utilities\Build.ps1          # sync the compatibility module version, validate manifests and exports
+.\Utilities\Build.ps1 -Test    # the same, then run every Pester suite on both editions
 ```
-
-The module is pure script, the build is a plain copy of `src\M365DSC.PSDesiredStateConfiguration` to
-`out\M365DSC.PSDesiredStateConfiguration` (plus the compatibility module to `out\PSDesiredStateConfiguration`).
 
 ## Tests
 
@@ -136,19 +136,19 @@ Tests use **Pester 6**. The suites in `test\` are:
 - `CacheRetention.Tests.ps1` - keyword cache retention across compiles
 - `SchemaCache.Tests.ps1` - schema cache export/validation
 
-They import the module under test by path and expect `test\TestModules` and the repo `src` directory on
-`PSModulePath`:
+Run them through the build script, or directly:
 
 ```powershell
 $repo = 'C:\path\to\PSDesiredStateConfiguration'
-$env:PSModulePath = (Join-Path $repo 'src') + [System.IO.Path]::PathSeparator +
+$env:PSModulePath = (Join-Path $repo 'M365DSC.PSDesiredStateConfiguration\Compat') + [System.IO.Path]::PathSeparator +
     (Join-Path $repo 'test\TestModules') + [System.IO.Path]::PathSeparator + $env:PSModulePath
-Invoke-Pester -Script (Join-Path $repo 'test')
+Invoke-Pester -Path (Join-Path $repo 'test')
 ```
 
-CI (`.github\workflows\ci.yml`) runs all suites under both editions plus a PSScriptAnalyzer error-level
-lint. Benchmark tooling lives in `tools\benchmarks` (`Compare-DscMofOutput.ps1`,
-`New-DscBenchmarkConfig.ps1`, `Invoke-DscCompileBenchmark.ps1`).
+`.github\workflows\Build and Test.yml` runs the build script, the suites and a PSScriptAnalyzer
+error-level pass on every pull request; `PublishToGallery.yml` publishes on push to master. Benchmark
+tooling lives in `tools\benchmarks` (`Compare-DscMofOutput.ps1`, `New-DscBenchmarkConfig.ps1`,
+`Invoke-DscCompileBenchmark.ps1`).
 
 ## Changelog
 

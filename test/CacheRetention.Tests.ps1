@@ -2,8 +2,7 @@ BeforeAll {
     $script:PSDscTestRoot = $PSScriptRoot
     $script:PSDscRepoRoot = Split-Path $PSScriptRoot -Parent
     $script:PSDscModuleUnderTestManifest = @(
-        (Join-Path $script:PSDscRepoRoot 'out\M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
-        (Join-Path $script:PSDscRepoRoot 'src\M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
+        (Join-Path $script:PSDscRepoRoot 'M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
     function Import-PSDscModuleUnderTest
@@ -13,9 +12,9 @@ BeforeAll {
     }
 
     $script:PSDscOriginalPSModulePath = $env:PSModulePath
-    $script:PSDscModuleParent = Split-Path (Split-Path $script:PSDscModuleUnderTestManifest -Parent) -Parent
+    $script:PSDscCompatRoot = Join-Path (Split-Path $script:PSDscModuleUnderTestManifest -Parent) 'Compat'
     $script:PSDscPathSeparator = [System.IO.Path]::PathSeparator
-    $env:PSModulePath = (Join-Path $script:PSDscTestRoot 'TestModules') + $script:PSDscPathSeparator + $script:PSDscModuleParent + $script:PSDscPathSeparator + $env:PSModulePath
+    $env:PSModulePath = (Join-Path $script:PSDscTestRoot 'TestModules') + $script:PSDscPathSeparator + $script:PSDscCompatRoot + $script:PSDscPathSeparator + $env:PSModulePath
 
     function Get-PSDscMofText
     {
@@ -120,7 +119,7 @@ Configuration RetentionClearCfg
             $testModulesPath = Join-Path $script:PSDscTestRoot 'TestModules'
             $cleanedEntries = $script:PSDscOriginalPSModulePath -split [regex]::Escape($script:PSDscPathSeparator) |
                 Where-Object { $_ -and $_ -ne $testModulesPath }
-            $env:PSModulePath = $copyRoot + $script:PSDscPathSeparator + $script:PSDscModuleParent + $script:PSDscPathSeparator + ($cleanedEntries -join $script:PSDscPathSeparator)
+            $env:PSModulePath = $copyRoot + $script:PSDscPathSeparator + $script:PSDscCompatRoot + $script:PSDscPathSeparator + ($cleanedEntries -join $script:PSDscPathSeparator)
 
             # Earlier compiles leave the TestModules copy imported; a loaded module plus the
             # on-path copy counts as multiple versions for the engine's parse-time import.

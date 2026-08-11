@@ -2,8 +2,7 @@ BeforeAll {
     $script:PSDscTestRoot = $PSScriptRoot
     $script:PSDscRepoRoot = Split-Path $PSScriptRoot -Parent
     $script:PSDscModuleUnderTestManifest = @(
-        (Join-Path $script:PSDscRepoRoot 'out\M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
-        (Join-Path $script:PSDscRepoRoot 'src\M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
+        (Join-Path $script:PSDscRepoRoot 'M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
     function Import-PSDscModuleUnderTest
@@ -16,9 +15,9 @@ BeforeAll {
     # on the path. The module under test claims the engine-qualified Configuration name
     # itself when imported, so its own location only matters for out-of-process runs.
     $script:PSDscOriginalPSModulePath = $env:PSModulePath
-    $moduleParent = Split-Path (Split-Path $script:PSDscModuleUnderTestManifest -Parent) -Parent
+    $compatRoot = Join-Path (Split-Path $script:PSDscModuleUnderTestManifest -Parent) 'Compat'
     $separator = [System.IO.Path]::PathSeparator
-    $env:PSModulePath = (Join-Path $script:PSDscTestRoot 'TestModules') + $separator + $moduleParent + $separator + $env:PSModulePath
+    $env:PSModulePath = (Join-Path $script:PSDscTestRoot 'TestModules') + $separator + $compatRoot + $separator + $env:PSModulePath
 
     function Get-PSDscStripResult
     {
@@ -51,12 +50,12 @@ AfterAll {
 
 Describe 'Fast host contract' {
     It 'uses the PSDscFastCompileActive recursion guard global consumed by Microsoft365DSC trailers' {
-        $fastHostText = [System.IO.File]::ReadAllText((Join-Path $script:PSDscRepoRoot 'src\M365DSC.PSDesiredStateConfiguration\FastHost.ps1'))
+        $fastHostText = [System.IO.File]::ReadAllText((Join-Path $script:PSDscRepoRoot 'M365DSC.PSDesiredStateConfiguration\FastHost.ps1'))
         $fastHostText | Should -Match '\$Global:PSDscFastCompileActive'
     }
 
     It 'ships a compatibility module of the same version that claims the engine-resolved name' {
-        $compatManifest = Join-Path $script:PSDscRepoRoot 'src\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1'
+        $compatManifest = Join-Path $script:PSDscRepoRoot 'M365DSC.PSDesiredStateConfiguration\Compat\PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1'
         Test-Path $compatManifest | Should -Be $true
         $compat = Import-PowerShellDataFile -Path $compatManifest
         $engine = Import-PowerShellDataFile -Path $script:PSDscModuleUnderTestManifest
