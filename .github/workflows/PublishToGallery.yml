@@ -1,0 +1,34 @@
+name: Publish to PowerShell Gallery
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  PublishToGallery:
+    runs-on: windows-latest
+
+    # Only when run from the main repo
+    if: github.repository == 'Microsoft365DSC/PSDesiredStateConfiguration'
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Build Module
+        shell: pwsh
+        run: |
+          & ./Utilities/Build.ps1
+
+      - name: Validate Module Manifest
+        shell: pwsh
+        run: |
+          Test-ModuleManifest -Path ./M365DSC.PSDesiredStateConfiguration/M365DSC.PSDesiredStateConfiguration.psd1
+
+      - name: Publish
+        shell: pwsh
+        env:
+          PUBLIC_NUGETAPIKEY: ${{ secrets.NUGETAPIKEY }}
+        run: |
+          Publish-Module -Path "./M365DSC.PSDesiredStateConfiguration" -NugetAPIKey $env:PUBLIC_NUGETAPIKEY

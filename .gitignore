@@ -1,3 +1,4 @@
-/out
 *.pester.xml
 *.DS_Store
+TestResults/
+.claude/
