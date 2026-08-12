@@ -1,0 +1,46 @@
+name: Build and Test
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - master
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    permissions: write-all
+
+    # Only when run from the main repo
+    if: github.repository == 'Microsoft365DSC/PSDesiredStateConfiguration'
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Install Modules
+        shell: pwsh
+        run: |
+          Install-PSResource -Name Pester -Scope AllUsers -TrustRepository
+          Install-PSResource -Name PSScriptAnalyzer -Scope AllUsers -TrustRepository
+
+      - name: Build Module
+        shell: pwsh
+        run: |
+          & ./Utilities/Build.ps1
+
+      - name: Run Pester Tests
+        shell: pwsh
+        run: |
+          & ./Utilities/Build.ps1 -Test
+
+      - name: Run Script Analyzer
+        shell: pwsh
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path ./M365DSC.PSDesiredStateConfiguration -Recurse -Severity Error
+          if ($results)
+          {
+              $results | Format-Table RuleName, ScriptName, Line, Message -AutoSize | Out-String | Write-Host
+              throw "{$($results.Count)} Script Analyzer error(s) found"
+          }
