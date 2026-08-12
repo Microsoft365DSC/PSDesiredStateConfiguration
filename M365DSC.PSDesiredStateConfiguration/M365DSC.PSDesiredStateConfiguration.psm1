@@ -210,24 +210,19 @@ function Set-PSMetaConfigVersionInfoV2
 
 function Get-CompatibleVersionAdditionalPropertiesString
 {
-    '{'
-    if($script:PSMetaConfigDocumentInstVersionInfo['CompatibleVersionAdditionalProperties'])
+    [OutputType([string])]
+    param()
+
+    $entries = @()
+    if ($script:PSMetaConfigDocumentInstVersionInfo['CompatibleVersionAdditionalProperties'])
     {
-        $len = @($script:PSMetaConfigDocumentInstVersionInfo['CompatibleVersionAdditionalProperties']).Length
-        foreach ($e in @($script:PSMetaConfigDocumentInstVersionInfo['CompatibleVersionAdditionalProperties']))
+        $entries = foreach ($e in @($script:PSMetaConfigDocumentInstVersionInfo['CompatibleVersionAdditionalProperties']))
         {
-                "`"$e`"" + $(if (--$len -gt 0)
-                {
-                    ', '
-                }
-                else
-                {
-                    ''
-                }
-            )
+            "`"$e`""
         }
     }
-    '}'
+
+    '{' + ($entries -join ', ') + '}'
 }
 
 ###########################################################
