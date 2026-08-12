@@ -9,11 +9,11 @@ For how the compiler and fast host work internally, see [Architecture.md](Archit
 The package contains two modules:
 
 | Folder | Purpose |
-|---|---|
+| --- | --- |
 | `M365DSC.PSDesiredStateConfiguration` | The engine: compiler, fast host, schema cache. Import this one, by path. |
 | `M365DSC.PSDesiredStateConfiguration\Compat\PSDesiredStateConfiguration` | A compatibility module of the same version that re-exports the engine's commands. |
 
-The compatibility module exists because the PowerShell engine resolves the module named `PSDesiredStateConfiguration` while it executes a `Configuration ... { }` statement, and that module then owns the qualified `PSDesiredStateConfiguration\Configuration` call every compiled configuration body makes. Without it, compilation silently falls through to the inbox 1.1 (Windows PowerShell) or gallery 2.x (PowerShell 7) module. The engine's `Compat` folder must therefore be on `PSModulePath`. The compatibility module reuses an already-loaded engine instance rather than importing a second one.
+The compatibility module exists because the PowerShell engine resolves the module named `PSDesiredStateConfiguration` while it executes a `Configuration ... { }` statement, and that module then owns the qualified `PSDesiredStateConfiguration\Configuration` call every compiled configuration body makes. Without it, compilation silently falls through to the inbox 1.1 (Windows PowerShell) or gallery 2.x (PowerShell 7) module. Importing the engine loads the compatibility module and prepends its folder to the process `PSModulePath`. The compatibility module reuses an already-loaded engine instance rather than importing a second one.
 
 ## Commands
 
@@ -57,14 +57,10 @@ Test-DscSchemaCache -ModulePath <string> -CachePath <string> [-Detailed]
 
 Returns `$true`/`$false`. Validates format version and module version; `-Detailed` re-hashes every file recorded in `sourceHash` (CI drift gate).
 
-### Clear-DscKeywordCache
-
-Resets all keyword/schema caching state (escape hatch for module-development loops).
-
 ## Schema cache resolution order
 
-1. `<ModuleBase>\DscSchemaCache.json` — shipped inside the resource module package.
-2. `%LOCALAPPDATA%\M365DSC.PSDesiredStateConfiguration\SchemaCache\<Name>_<Version>_<fingerprint>.json` — written after a live generation.
+1. `<ModuleBase>\DscSchemaCache.json` - shipped inside the resource module package.
+2. `%LOCALAPPDATA%\M365DSC.PSDesiredStateConfiguration\SchemaCache\<Name>_<Version>_<fingerprint>.json` - written after a live generation.
 3. Live generation (then persisted to 2).
 
 A cache is used only when its module name, version, and fingerprint (`fileCount:maxLastWriteTimeUtcTicks` over `*.psm1|*.psd1|*.mof`) match the resolved module.
@@ -110,4 +106,4 @@ Consumers must reject caches with a `formatVersion` greater than the one they kn
 
 ## Module resolution requirement
 
-Compiled configuration bodies call `PSDesiredStateConfiguration\Configuration`, and the engine resolves that name **through PSModulePath while the configuration statement executes**. Consumers must therefore put the engine's `Compat` folder on `PSModulePath` (Microsoft365DSC's `Import-M365DSCDscEngine` does this), then import `M365DSC.PSDesiredStateConfiguration` by path. Importing the engine alone without the compatibility module on the path is not enough, the first compile succeeds through the engine's in-session claim of that function name, but a later one silently reverts to the inbox or gallery module.
+Compiled configuration bodies call `PSDesiredStateConfiguration\Configuration` and the generated configuration function runs `Import-Module PSDesiredStateConfiguration` ahead of it. Both resolve **by module name while the configuration statement executes**, so whichever module holds that name owns the compile. Consumers import `M365DSC.PSDesiredStateConfiguration` by path and nothing else. That import claims the name for the process by loading the bundled compatibility module (under `/Compat`) and prepending the engine's `Compat` folder to `$env:PSModulePath`. `Remove-Module` undoes both for cleanup. A consumer that overwrites `$env:PSModulePath` after importing the engine has to re-add that folder. Otherwise the generated import pulls in the inbox or gallery module, whose exports then own `Configuration`, `Get-DscResource` and other functions.

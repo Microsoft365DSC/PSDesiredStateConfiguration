@@ -37,9 +37,25 @@ if ($__fhValue -isnot [hashtable])
 {
     throw "Resource '$__fhKeywordName': the property block could not be evaluated as a set of 'Name = Value' assignments."
 }
-$__fhSource = "$($MyInvocation.ScriptName)::$($MyInvocation.ScriptLineNumber)::$($MyInvocation.OffsetInLine)::$__fhKeywordName"
+$__fhFile = $MyInvocation.ScriptName
+if ([string]::IsNullOrEmpty($__fhFile))
+{
+    # The body runs from a scriptblock built out of the stripped text, so it carries no
+    # file. Use the path the compile was started from, to keep SourceInfo identical to
+    # what the standard path emits.
+    $__fhFile = Get-FastHostScriptPath
+}
+$__fhSource = "$__fhFile::$($MyInvocation.ScriptLineNumber)::$($MyInvocation.OffsetInLine)::$__fhKeywordName"
 & (Get-CimKeywordImplementationFunction) -KeywordData $__fhKeyword -Name $__fhName -Value $__fhValue -SourceMetadata $__fhSource
 '@
+
+function Get-FastHostScriptPath
+{
+    [OutputType([string])]
+    param()
+
+    $script:FastHostScriptPath
+}
 
 function Get-FastHostKeyword
 {
@@ -494,6 +510,11 @@ function Invoke-DscFastCompileBody
     )
 
     $scriptBlock = [scriptblock]::Create($Text)
+
+    # A scriptblock built from text has no file, so the adapter cannot read the source
+    # path off $MyInvocation. Hand it the real one to keep SourceInfo aligned with the
+    # standard path.
+    $script:FastHostScriptPath = $ScriptPath
 
     # Parsing the configuration statement makes the engine load the inbox module by
     # file path, which takes the qualified Configuration name over.

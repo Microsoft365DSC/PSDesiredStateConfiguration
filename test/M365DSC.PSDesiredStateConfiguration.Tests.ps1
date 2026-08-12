@@ -67,7 +67,6 @@ Describe "Test M365DSC.PSDesiredStateConfiguration" {
             @{ CommandName = 'New-DscChecksum' }
             @{ CommandName = 'Get-DscResource' }
             @{ CommandName = 'Invoke-DscResource' }
-            @{ CommandName = 'Clear-DscKeywordCache' }
             @{ CommandName = 'Invoke-DscFastCompile' }
             @{ CommandName = 'Export-DscSchemaCache' }
             @{ CommandName = 'Test-DscSchemaCache' }

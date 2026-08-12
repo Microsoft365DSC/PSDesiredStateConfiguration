@@ -147,7 +147,7 @@ function Export-DscSchemaCache
         }
     }
 
-    Clear-DscKeywordCache
+    Reset-DscKeywordState
     $defaultFunctions = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,scriptblock]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
     [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::LoadDefaultCimKeywords($defaultFunctions)
     $defaultKeywordNames = New-Object -TypeName 'System.Collections.Generic.HashSet[string]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
@@ -196,7 +196,7 @@ function Export-DscSchemaCache
         keywords      = $keywords
     }
 
-    Clear-DscKeywordCache
+    Reset-DscKeywordState
 
     if (-not $OutputPath)
     {

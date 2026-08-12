@@ -151,9 +151,7 @@ if ($Test)
     $runner = @"
 `$ErrorActionPreference = 'Stop'
 Import-Module -Name Pester -MinimumVersion 5.0
-# Resource modules and the compatibility module are resolved by name while a configuration runs.
-`$env:PSModulePath = '$($moduleRoot.Replace("'", "''"))\Compat' + [System.IO.Path]::PathSeparator +
-    '$($testRoot.Replace("'", "''"))\TestModules' + [System.IO.Path]::PathSeparator + `$env:PSModulePath
+`$env:PSModulePath = '$($testRoot.Replace("'", "''"))\TestModules' + [System.IO.Path]::PathSeparator + `$env:PSModulePath
 `$configuration = New-PesterConfiguration
 `$configuration.Run.Path = @($suiteList)
 `$configuration.Run.PassThru = `$true

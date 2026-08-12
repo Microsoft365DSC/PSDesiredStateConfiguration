@@ -90,13 +90,6 @@ $script:FastHostKeywords = $null
 $script:FastHostAdapters = $null
 $script:FastHostBodyCache = @{}
 $script:FastHostRegisteredModules = @{}
-$script:DscKeywordCacheState = @{
-    DefaultFunctions     = $null
-    KeywordSnapshot      = $null
-    ExpectedKeywordCount = 0
-    ImportedModules      = @{}
-}
-
 function Get-CimKeywordImplementationFunction
 {
     [OutputType([scriptblock])]
@@ -136,144 +129,13 @@ function Get-DscModuleFingerprint
     "${count}:$maxTicks"
 }
 
-function Test-DscKeywordCacheValid
-{
-    [OutputType([bool])]
-    param()
-
-    ($null -ne $script:DscKeywordCacheState.DefaultFunctions) -and
-    ($null -ne $script:DscKeywordCacheState.KeywordSnapshot) -and
-    ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::GetCachedKeywords().Count -ge $script:DscKeywordCacheState.ExpectedKeywordCount)
-}
-
-function Clear-DscKeywordCache
+function Reset-DscKeywordState
 {
     [OutputType([void])]
     param()
 
     [System.Management.Automation.Language.DynamicKeyword]::Reset()
     [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ClearCache()
-    $script:DscKeywordCacheState.DefaultFunctions = $null
-    $script:DscKeywordCacheState.KeywordSnapshot = $null
-    $script:DscKeywordCacheState.ExpectedKeywordCount = 0
-    $script:DscKeywordCacheState.ImportedModules = @{}
-}
-Export-ModuleMember -Function Clear-DscKeywordCache
-
-function Import-CachedDscKeywords
-{
-    [OutputType([bool])]
-    param (
-        [Parameter(Mandatory)]
-        [System.Management.Automation.PSModuleInfo]
-        $Module,
-
-        [string[]]
-        $Resources,
-
-        [Parameter(Mandatory)]
-        [System.Collections.Generic.Dictionary[string, scriptblock]]
-        $FunctionsToDefine
-    )
-
-    $entry = $script:DscKeywordCacheState.ImportedModules[$Module.Name]
-    if ($null -eq $entry -or $entry.Version -ne $Module.Version)
-    {
-        return $false
-    }
-
-    if (-not $entry.CoversAllResources)
-    {
-        foreach ($resource in $Resources)
-        {
-            if (-not $entry.Resources.Contains($resource))
-            {
-                return $false
-            }
-        }
-    }
-
-    if ((Get-DscModuleFingerprint -Module $Module) -ne $entry.Fingerprint)
-    {
-        Clear-DscKeywordCache
-        $defaultFunctions = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,scriptblock]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
-        [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::LoadDefaultCimKeywords($defaultFunctions)
-        Save-DscDefaultFunctionSnapshot -FunctionsToDefine $defaultFunctions
-        foreach ($item in $defaultFunctions.GetEnumerator())
-        {
-            $FunctionsToDefine[$item.Key] = $item.Value
-        }
-        return $false
-    }
-
-    foreach ($item in $entry.Functions.GetEnumerator())
-    {
-        $FunctionsToDefine[$item.Key] = $item.Value
-    }
-    return $true
-}
-
-function Save-DscDefaultFunctionSnapshot
-{
-    [OutputType([void])]
-    param (
-        [Parameter(Mandatory)]
-        [System.Collections.Generic.Dictionary[string, scriptblock]]
-        $FunctionsToDefine
-    )
-
-    $snapshot = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,scriptblock]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($item in $FunctionsToDefine.GetEnumerator())
-    {
-        $snapshot[$item.Key] = $item.Value
-    }
-    $script:DscKeywordCacheState.DefaultFunctions = $snapshot
-    $script:DscKeywordCacheState.ExpectedKeywordCount = [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::GetCachedKeywords().Count
-}
-
-function Save-ImportedDscModuleState
-{
-    [OutputType([void])]
-    param (
-        [Parameter(Mandatory)]
-        [System.Management.Automation.PSModuleInfo]
-        $Module,
-
-        [string[]]
-        $Resources,
-
-        [Parameter(Mandatory)]
-        [System.Collections.Generic.HashSet[string]]
-        $KeysBefore,
-
-        [Parameter(Mandatory)]
-        [System.Collections.Generic.Dictionary[string, scriptblock]]
-        $FunctionsToDefine
-    )
-
-    $functions = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,scriptblock]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($item in $FunctionsToDefine.GetEnumerator())
-    {
-        if (-not $KeysBefore.Contains($item.Key))
-        {
-            $functions[$item.Key] = $item.Value
-        }
-    }
-
-    $resourceSet = New-Object -TypeName 'System.Collections.Generic.HashSet[string]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($resource in $Resources)
-    {
-        $null = $resourceSet.Add($resource)
-    }
-
-    $script:DscKeywordCacheState.ImportedModules[$Module.Name] = @{
-        Version            = $Module.Version
-        Fingerprint        = Get-DscModuleFingerprint -Module $Module
-        Resources          = $resourceSet
-        CoversAllResources = [bool]($Resources -contains '*')
-        Functions          = $functions
-    }
-    $script:DscKeywordCacheState.ExpectedKeywordCount = [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::GetCachedKeywords().Count
 }
 
 #################################################################
@@ -346,7 +208,7 @@ function Set-PSMetaConfigVersionInfoV2
     }
 }
 
-function Get-CompatibleVersionAddtionaPropertiesStr
+function Get-CompatibleVersionAdditionalPropertiesString
 {
     '{'
     if($script:PSMetaConfigDocumentInstVersionInfo['CompatibleVersionAdditionalProperties'])
@@ -979,27 +841,18 @@ function Get-PositionInfo
         $sourceMetadata
     )
 
-    $positionMessage = ''
-    if ($sourceMetadata)
+    if (-not $sourceMetadata)
     {
-        $positionMessage = "`nAt"
-        $infoItems = $sourceMetadata -split '::'
-
-        # File name may be empty
-        if ($infoItems[0])
-        {
-            $positionMessage += " $($infoItems[0]):$($infoItems[1])"
-        }
-        else
-        {
-            $positionMessage += " line:$($infoItems[1])"
-        }
-
-        $positionMessage += " char:$($infoItems[2])"
-        $positionMessage += "`n+   $($infoItems[3])"
+        return ''
     }
 
-    $positionMessage
+    # SourceInfo is 'file::line::column::keyword'; the file is empty for text-only compiles.
+    # Indexed rather than destructured, so a metadata string with extra segments keeps the
+    # upstream behaviour of using only the first four.
+    $infoItems = $sourceMetadata -split '::'
+    $location = if ($infoItems[0]) { "$($infoItems[0]):$($infoItems[1])" } else { "line:$($infoItems[1])" }
+
+    "`nAt $location char:$($infoItems[2])`n+   $($infoItems[3])"
 }
 
 
@@ -2167,23 +2020,7 @@ function Configuration
                 $OutputPath = ".\$Name"
             }
 
-            if (Test-DscKeywordCacheValid)
-            {
-                foreach ($item in $script:DscKeywordCacheState.DefaultFunctions.GetEnumerator())
-                {
-                    $functionsToDefine[$item.Key] = $item.Value
-                }
-                foreach ($keyword in $script:DscKeywordCacheState.KeywordSnapshot)
-                {
-                    [System.Management.Automation.Language.DynamicKeyword]::AddKeyword($keyword)
-                }
-            }
-            else
-            {
-                $script:DscKeywordCacheState.ImportedModules = @{}
-                [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::LoadDefaultCimKeywords($functionsToDefine)
-                Save-DscDefaultFunctionSnapshot -FunctionsToDefine $functionsToDefine
-            }
+            [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::LoadDefaultCimKeywords($functionsToDefine)
 
             # Set up the rest of the configuration runtime state.
             Initialize-ConfigurationRuntimeState $Name
@@ -2251,6 +2088,7 @@ function Configuration
                 }
                 $functionsToDefine['Get-FastHostKeyword'] = ${function:Get-FastHostKeyword}
                 $functionsToDefine['Get-FastHostBodyScriptBlock'] = ${function:Get-FastHostBodyScriptBlock}
+                $functionsToDefine['Get-FastHostScriptPath'] = ${function:Get-FastHostScriptPath}
                 $functionsToDefine['Get-CimKeywordImplementationFunction'] = ${function:Get-CimKeywordImplementationFunction}
             }
 
@@ -2288,23 +2126,7 @@ function Configuration
 
             foreach ($mod in $modulesInfo) {
 
-                if (Import-CachedDscKeywords -Module $mod -Resources $res -FunctionsToDefine $functionsToDefine)
-                {
-                    continue
-                }
-
-                $keysBefore = New-Object -TypeName 'System.Collections.Generic.HashSet[string]' -ArgumentList @([string[]]@($functionsToDefine.Keys), [System.StringComparer]::OrdinalIgnoreCase)
-
                 $null = ImportClassResourcesFromModule -Module $mod -Resources $res -functionsToDefine $functionsToDefine
-
-                $driver = Get-CimKeywordImplementationFunction
-                foreach ($key in @($functionsToDefine.Keys))
-                {
-                    if (-not $keysBefore.Contains($key))
-                    {
-                        $functionsToDefine[$key] = $driver
-                    }
-                }
 
                 $dscResourcesPath = Join-Path -Path $mod.ModuleBase -ChildPath 'DscResources'
                 if(Test-Path $dscResourcesPath)
@@ -2324,8 +2146,6 @@ function Configuration
                         }
                     }
                 }
-
-                Save-ImportedDscModuleState -Module $mod -Resources $res -KeysBefore $keysBefore -FunctionsToDefine $functionsToDefine
             }
         }
 
@@ -2561,7 +2381,6 @@ function Configuration
         if($topLevel)
         {
             Write-Debug -Message "  CONFIGURATION $Name : DOING TOP-LEVEL CLEAN UP"
-            $script:DscKeywordCacheState.KeywordSnapshot = @([System.Management.Automation.Language.DynamicKeyword]::GetKeyword())
             [System.Management.Automation.Language.DynamicKeyword]::Reset()
             $script:ConfigurationNestingStack.Clear()
 
@@ -2806,6 +2625,33 @@ function ImportCimAndScriptKeywordsFromModule
 # Writes a MOF document to disk with a deterministic encoding (UTF-8 without
 # BOM) on both Windows PowerShell 5.1 and PowerShell 7.
 #
+# Builds the OMI_ConfigurationDocument instance that closes a document.
+function New-ConfigurationDocumentInstance
+{
+    [OutputType([string])]
+    param
+    (
+        [Parameter(Mandatory)]
+        [string]
+        $MinimumCompatibleVersion,
+
+        [Parameter(Mandatory)]
+        [string]
+        $CompatibleVersionAdditionalProperties,
+
+        [switch]
+        $PasswordEncrypted
+    )
+
+    $contentType = if ($PasswordEncrypted) { " ContentType=`"PasswordEncrypted`";`n" } else { '' }
+
+    "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n" +
+    " MinimumCompatibleVersion = `"$MinimumCompatibleVersion`";`n" +
+    " CompatibleVersionAdditionalProperties= $CompatibleVersionAdditionalProperties;`n" +
+    $contentType +
+    " Name=`"$(Get-PSTopConfigurationName)`";`n};"
+}
+
 function Write-MofDocumentFile
 {
     param(
@@ -2842,18 +2688,17 @@ function Write-MetaConfigFile
 
     )
 
-    $nodeDoc = $null
+    $nodeDocBuilder = New-Object -TypeName System.Text.StringBuilder
     $nodeConfigurationDocument = $null
     [int]$nodeDocCount = 0
-    $resourceManagers = $null
-    $resourceManagersCount = 0
-    $reportManagers = $null
-    $reportManagersCount = 0
-    $downloadManagers = $null
-    $downloadManagersCount = 0
     $localConfigManager = $null
-    $partialConfiguratons = $null
-    $partialConfigurationCount = 0
+
+    # Each manager kind collects the instance references it finds and is emitted as one
+    # comma-separated list, so the members accumulate in a list instead of a growing string.
+    $resourceManagerRefs = New-Object -TypeName 'System.Collections.Generic.List[string]'
+    $reportManagerRefs = New-Object -TypeName 'System.Collections.Generic.List[string]'
+    $downloadManagerRefs = New-Object -TypeName 'System.Collections.Generic.List[string]'
+    $partialConfigurationRefs = New-Object -TypeName 'System.Collections.Generic.List[string]'
 
     foreach($mofTypeName in $mofNodeHash.Keys)
     {
@@ -2862,62 +2707,26 @@ function Write-MetaConfigFile
             $nodeConfigurationDocument = $mofNodeHash[$mofTypeName]
         }
 
-        if($mofTypeName -match 'MSFT_WebDownloadManager' -or $mofTypeName -match 'MSFT_FileDownloadManager')
+        $instanceReference = $null
+        if($mofNodeHash[$mofTypeName] -match '\$\w*')
         {
-            $r = $mofNodeHash[$mofTypeName] -match '\$\w*'
-            if($r)
-            {
-                if($downloadManagersCount++ -gt 0)
-                {
-                    $downloadManagers += ",`n"
-                }
-                $downloadManagers += '  ' + $Matches[0]
-            }
+            $instanceReference = '  ' + $Matches[0]
         }
 
-        if($mofTypeName -match 'MSFT_WebResourceManager' -or $mofTypeName -match 'MSFT_FileResourceManager')
+        if($instanceReference)
         {
-            $r = $mofNodeHash[$mofTypeName] -match '\$\w*'
-            if($r)
+            switch -Regex ($mofTypeName)
             {
-                if($resourceManagersCount++ -gt 0)
-                {
-                    $resourceManagers += ",`n"
-                }
-                $resourceManagers += '  ' +$Matches[0]
-            }
-        }
-
-        if($mofTypeName -match 'MSFT_OaaSReportManager' -or $mofTypeName -match 'MSFT_WebReportManager')
-        {
-            $r = $mofNodeHash[$mofTypeName] -match '\$\w*'
-            if($r)
-            {
-                if($reportManagersCount++ -gt 0)
-                {
-                    $reportManagers += ",`n"
-                }
-                $reportManagers += '  ' +$Matches[0]
-            }
-        }
-
-        #MSFT_PartialConfiguration
-        if($mofTypeName -match 'MSFT_PartialConfiguration')
-        {
-            $r = $mofNodeHash[$mofTypeName] -match '\$\w*'
-            if($r)
-            {
-                if($partialConfigurationCount++ -gt 0)
-                {
-                    $partialConfiguratons += ",`n"
-                }
-                $partialConfiguratons += '  ' +$Matches[0]
+                'MSFT_WebDownloadManager|MSFT_FileDownloadManager' { $downloadManagerRefs.Add($instanceReference) }
+                'MSFT_WebResourceManager|MSFT_FileResourceManager' { $resourceManagerRefs.Add($instanceReference) }
+                'MSFT_OaaSReportManager|MSFT_WebReportManager'     { $reportManagerRefs.Add($instanceReference) }
+                'MSFT_PartialConfiguration'                        { $partialConfigurationRefs.Add($instanceReference) }
             }
         }
 
         if($mofTypeName -notmatch 'MSFT_DSCMetaConfiguration')
         {
-            $nodeDoc += $mofNodeHash[$mofTypeName]
+            $null = $nodeDocBuilder.Append($mofNodeHash[$mofTypeName])
         }
         else
         {
@@ -2949,8 +2758,15 @@ function Write-MetaConfigFile
         $localConfigManager = "`ninstance of MSFT_DSCMetaConfiguration as `$MSFT_DSCMetaConfiguration1ref `n{`n};"
     }
 
+    $separator = ",`n"
+    $resourceManagers = if ($resourceManagerRefs.Count) { $resourceManagerRefs -join $separator } else { $null }
+    $reportManagers = if ($reportManagerRefs.Count) { $reportManagerRefs -join $separator } else { $null }
+    $downloadManagers = if ($downloadManagerRefs.Count) { $downloadManagerRefs -join $separator } else { $null }
+    $partialConfiguratons = if ($partialConfigurationRefs.Count) { $partialConfigurationRefs -join $separator } else { $null }
+
     # fixup to add embedded instances
-    $nodeDoc += Update-LocalConfigManager $localConfigManager $resourceManagers $reportManagers $downloadManagers $partialConfiguratons
+    $nodeDoc = $nodeDocBuilder.ToString() +
+        (Update-LocalConfigManager $localConfigManager $resourceManagers $reportManagers $downloadManagers $partialConfiguratons)
 
 
     $nodeOutfile = "$ConfigurationOutputDirectory/$($mofNode).meta.mof"
@@ -2966,14 +2782,10 @@ function Write-MetaConfigFile
         else
         {
             Write-Debug -Message "  ${ConfigurationName}: Adding missing OMI_ConfigurationDocument element to the document"
-            if($Script:NodesPasswordEncrypted[$mofNode])
-            {
-                $nodeDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"$($script:PSMetaConfigDocumentInstVersionInfo['MinimumCompatibleVersion'])`";`n CompatibleVersionAdditionalProperties= $(Get-CompatibleVersionAddtionaPropertiesStr);`n ContentType=`"PasswordEncrypted`";`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
-            }
-            else
-            {
-                $nodeDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"$($script:PSMetaConfigDocumentInstVersionInfo['MinimumCompatibleVersion'])`";`n CompatibleVersionAdditionalProperties= $(Get-CompatibleVersionAddtionaPropertiesStr);`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
-            }
+            $nodeDoc += New-ConfigurationDocumentInstance `
+                -MinimumCompatibleVersion $script:PSMetaConfigDocumentInstVersionInfo['MinimumCompatibleVersion'] `
+                -CompatibleVersionAdditionalProperties (Get-CompatibleVersionAdditionalPropertiesString) `
+                -PasswordEncrypted:([bool]$Script:NodesPasswordEncrypted[$mofNode])
         }
     }
 
@@ -3016,35 +2828,34 @@ function Update-LocalConfigManager
         $partialConfigurations
     )
 
-    $curlyPostion = $localConfigManager.LastIndexOf('}')
-    if($curlyPostion -gt 0)
+    $closingBracePosition = $localConfigManager.LastIndexOf('}')
+    if($closingBracePosition -le 0)
     {
-        $first = $localConfigManager.Substring(0, $curlyPostion)
-        if($resourceManagers)
-        {
-            $first += "  ResourceModuleManagers = {`n" + $resourceManagers + "  `n };`n"
-        }
-
-        if($reportManagers)
-        {
-            $first += "  ReportManagers = {`n" + $reportManagers + "  `n };`n"
-        }
-
-        if($downloadManagers)
-        {
-            $first += "  ConfigurationDownloadManagers = {`n" + $downloadManagers + "  `n };`n"
-        }
-
-        #PartialConfigurations
-        if($partialConfigurations)
-        {
-            $first += "  PartialConfigurations = {`n" + $partialConfigurations + "  `n };`n"
-        }
-
-        $first += "};`n"
-
-        $first
+        return
     }
+
+    $builder = New-Object -TypeName System.Text.StringBuilder
+    $null = $builder.Append($localConfigManager.Substring(0, $closingBracePosition))
+
+    # Property name -> the embedded instance list it wraps. Empty lists are skipped, which
+    # is what keeps an unused manager kind out of the meta configuration entirely.
+    $embeddedLists = [ordered]@{
+        'ResourceModuleManagers'         = $resourceManagers
+        'ReportManagers'                 = $reportManagers
+        'ConfigurationDownloadManagers'  = $downloadManagers
+        'PartialConfigurations'          = $partialConfigurations
+    }
+
+    foreach($entry in $embeddedLists.GetEnumerator())
+    {
+        if($entry.Value)
+        {
+            $null = $builder.Append("  $($entry.Key) = {`n").Append($entry.Value).Append("  `n };`n")
+        }
+    }
+
+    $null = $builder.Append("};`n")
+    $builder.ToString()
 }
 
 function Get-MofInstanceName
@@ -3131,14 +2942,9 @@ function Write-NodeMOFFile
         else
         {
             Write-Debug -Message "  ${ConfigurationName}: Adding missing OMI_ConfigurationDocument element to the document"
-            if($Script:NodesPasswordEncrypted[$mofNode])
-            {
-                $nodeMetaDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"1.0.0`";`n CompatibleVersionAdditionalProperties= $(Get-CompatibleVersionAddtionaPropertiesStr);`n ContentType=`"PasswordEncrypted`";`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
-            }
-            else
-            {
-                $nodeMetaDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"1.0.0`";`n CompatibleVersionAdditionalProperties= $(Get-CompatibleVersionAddtionaPropertiesStr);`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
-            }
+            $nodeMetaDoc += New-ConfigurationDocumentInstance -MinimumCompatibleVersion '1.0.0' `
+                -CompatibleVersionAdditionalProperties (Get-CompatibleVersionAdditionalPropertiesString) `
+                -PasswordEncrypted:([bool]$Script:NodesPasswordEncrypted[$mofNode])
         }
     }
 
@@ -3152,28 +2958,12 @@ function Write-NodeMOFFile
         else
         {
             Write-Debug -Message "  ${ConfigurationName}: Adding missing OMI_ConfigurationDocument element to the document"
-            if($Script:NodesPasswordEncrypted[$mofNode])
-            {
-                if($nodeDoc.Contains("PsDscRunAsCredential"))
-                {
-                    $nodeDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"2.0.0`";`n CompatibleVersionAdditionalProperties= {`"Omi_BaseResource:ConfigurationName`"};`n ContentType=`"PasswordEncrypted`";`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
-                }
-                else
-                {
-                    $nodeDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"1.0.0`";`n CompatibleVersionAdditionalProperties= {`"Omi_BaseResource:ConfigurationName`"};`n ContentType=`"PasswordEncrypted`";`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
-                }
-            }
-            else
-            {
-                if($nodeDoc.Contains("PsDscRunAsCredential"))
-                {
-                    $nodeDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"2.0.0`";`n CompatibleVersionAdditionalProperties= {`"Omi_BaseResource:ConfigurationName`"};`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
-                }
-                else
-                {
-                    $nodeDoc += "`ninstance of OMI_ConfigurationDocument`n{`n Version=`"2.0.0`";`n MinimumCompatibleVersion = `"1.0.0`";`n CompatibleVersionAdditionalProperties= {`"Omi_BaseResource:ConfigurationName`"};`n Name=`"$(Get-PSTopConfigurationName)`";`n};"
-                }
-            }
+            # PsDscRunAsCredential is a 2.0 feature, so a document that uses it must declare
+            # the higher minimum version.
+            $minimumVersion = if ($nodeDoc.Contains('PsDscRunAsCredential')) { '2.0.0' } else { '1.0.0' }
+            $nodeDoc += New-ConfigurationDocumentInstance -MinimumCompatibleVersion $minimumVersion `
+                -CompatibleVersionAdditionalProperties "{`"Omi_BaseResource:ConfigurationName`"}" `
+                -PasswordEncrypted:([bool]$Script:NodesPasswordEncrypted[$mofNode])
         }
     }
     $errMsg = Test-MofInstanceText $nodeDoc
@@ -5068,8 +4858,8 @@ function Get-InvokeDscResourceResult
 }
 
 Export-ModuleMember -Function @(
-        'Invoke-DscResource'
-    )
+    'Invoke-DscResource'
+)
 
 ###########################################################
 
@@ -5108,6 +4898,71 @@ function Assert-DscConfigurationShim
 
 Assert-DscConfigurationShim
 
+###########################################################
+#  Module name claim
+###########################################################
+#
+# Before a compiled configuration calls PSDesiredStateConfiguration\Configuration it runs
+# 'Import-Module PSDesiredStateConfiguration' from the prologue the engine bakes into every
+# configuration function. That import resolves the name through PSModulePath, so on an
+# untouched machine it loads the inbox 1.1 (Windows PowerShell) or gallery 2.x (PowerShell 7)
+# module, whose exports then shadow this module's Configuration, Get-DscResource etc.
+# for the rest of the session. Importing the shipped compatibility module from the PSModulePath
+# keeps everything in this module here.
+$script:CompatibilityRoot = Join-Path -Path $PSScriptRoot -ChildPath 'Compat'
+$script:CompatibilityManifest = Join-Path -Path $script:CompatibilityRoot -ChildPath 'PSDesiredStateConfiguration\PSDesiredStateConfiguration.psd1'
+$script:CompatibilityModuleFile = Join-Path -Path $script:CompatibilityRoot -ChildPath 'PSDesiredStateConfiguration\PSDesiredStateConfiguration.psm1'
+$script:AddedCompatibilityToPath = $false
+
+if (Test-Path -LiteralPath $script:CompatibilityManifest)
+{
+    $separator = [System.IO.Path]::PathSeparator
+    if (@($env:PSModulePath -split $separator) -notcontains $script:CompatibilityRoot)
+    {
+        $env:PSModulePath = $script:CompatibilityRoot + $separator + $env:PSModulePath
+        $script:AddedCompatibilityToPath = $true
+    }
+
+    $claimedModule = Get-Module -Name 'PSDesiredStateConfiguration' |
+        Where-Object -FilterScript { $_.Path -eq $script:CompatibilityModuleFile }
+    if (-not $claimedModule)
+    {
+        # The compatibility module cannot find this engine with Get-Module while the engine is
+        # still loading, so hand it the module object instead. Without this it would import a
+        # second copy of the engine, with its own keyword cache and fast host state.
+        $global:M365DscEngineHandoff = $MyInvocation.MyCommand.ScriptBlock.Module
+        try
+        {
+            Import-Module -Name $script:CompatibilityManifest -Global -Force -ErrorAction Stop
+        }
+        catch
+        {
+            Write-Warning -Message "The DSC compatibility module could not be loaded, so configurations may compile against a different PSDesiredStateConfiguration module: $($_.Exception.Message)"
+        }
+        finally
+        {
+            Remove-Variable -Name 'M365DscEngineHandoff' -Scope 'Global' -ErrorAction Ignore
+        }
+    }
+}
+
 $MyInvocation.MyCommand.ScriptBlock.Module.OnRemove = {
     Remove-Item -Path 'function:PSDesiredStateConfiguration\Configuration' -Force -ErrorAction Ignore
+
+    $claimedModule = Get-Module -Name 'PSDesiredStateConfiguration' |
+        Where-Object -FilterScript { $_.Path -eq $script:CompatibilityModuleFile }
+    if ($claimedModule)
+    {
+        Remove-Module -ModuleInfo $claimedModule -Force -ErrorAction Ignore
+    }
+
+    # Drop only the entry this module added. Restoring a snapshot taken at import time would
+    # discard whatever the session put on the path afterwards.
+    if ($script:AddedCompatibilityToPath)
+    {
+        $separator = [System.IO.Path]::PathSeparator
+        $env:PSModulePath = (@($env:PSModulePath -split $separator) |
+            Where-Object { $_ -and $_ -ne $script:CompatibilityRoot }) -join $separator
+        $script:AddedCompatibilityToPath = $false
+    }
 }

@@ -5,6 +5,15 @@
 # scriptblocks stay bound to their own module scope.
 
 $script:EngineModuleName = 'M365DSC.PSDesiredStateConfiguration'
+$script:ForwardedCommands = @(
+    'Configuration'
+    'New-DscChecksum'
+    'Get-DscResource'
+    'Invoke-DscResource'
+    'Invoke-DscFastCompile'
+    'Export-DscSchemaCache'
+    'Test-DscSchemaCache'
+)
 
 function Resolve-EngineManifest
 {
@@ -41,15 +50,29 @@ function Resolve-EngineManifest
 
 # Never reload an already-loaded engine: a second instance would carry its own
 # keyword and fast host state, and configurations would run against the wrong one.
-$script:EngineModule = Get-Module -Name $script:EngineModuleName | Select-Object -First 1
+# An engine that imports this module while it is still loading itself is not visible
+# to Get-Module yet, so it passes itself in through the handoff variable.
+$script:EngineModule = $global:M365DscEngineHandoff
+if (-not $script:EngineModule)
+{
+    $script:EngineModule = Get-Module -Name $script:EngineModuleName | Select-Object -First 1
+}
 if (-not $script:EngineModule)
 {
     $script:EngineModule = Import-Module -Name (Resolve-EngineManifest) -PassThru
 }
 
-foreach ($exported in $script:EngineModule.ExportedFunctions.GetEnumerator())
+foreach ($command in $script:ForwardedCommands)
 {
-    Set-Item -Path "function:script:$($exported.Key)" -Value $exported.Value.ScriptBlock
+    $scriptBlock = & $script:EngineModule {
+        param($name)
+        (Get-Item -Path "function:$name" -ErrorAction Ignore).ScriptBlock
+    } $command
+
+    if ($scriptBlock)
+    {
+        Set-Item -Path "function:script:$command" -Value $scriptBlock
+    }
 }
 
-Export-ModuleMember -Function @($script:EngineModule.ExportedFunctions.Keys)
+Export-ModuleMember -Function $script:ForwardedCommands
