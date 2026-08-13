@@ -248,11 +248,11 @@ Describe 'Get-DscSchemaCache' {
     }
 
     It 'returns nothing when every candidate is stale' {
-        # A copy with its own write times so no cache generated for the installed module can
-        # satisfy the lookup through the module base or the per user location.
-        $isolatedRoot = Copy-PSDscTestModule -Name xTestClassResource -Destination (Join-Path $TestDrive 'lookup-isolated')
-        Add-Content -Path (Join-Path $isolatedRoot 'xTestClassResource.psm1') -Value '# isolated copy'
-        $isolatedModule = Get-Module -ListAvailable (Join-Path $isolatedRoot 'xTestClassResource.psd1')
+        # A version of its own, so no cache generated for the installed module can satisfy the
+        # lookup through the module base or the per user location.
+        $isolated = New-PSDscIsolatedTestModule -Name xTestClassResource -Version '1.7' `
+            -Destination (Join-Path $TestDrive 'lookup-isolated')
+        $isolatedModule = $isolated.Module
 
         $stalePath = Join-Path $TestDrive 'lookup-stale.json'
         $null = Export-DscSchemaCache -Module $isolatedModule -OutputPath $stalePath
@@ -270,43 +270,54 @@ Describe 'Get-DscSchemaCache' {
 
 Describe 'New-DscSchemaCacheForModule' {
     It 'generates and returns a cache in the per user location' {
-        $moduleRoot = Join-Path $TestDrive 'generated-module'
-        $null = New-Item -ItemType Directory -Path $moduleRoot -Force
-        Copy-Item -Path (Join-Path $PSScriptRoot 'TestModules\xTestClassResource') -Destination $moduleRoot -Recurse -Force
-        $module = Get-Module -ListAvailable (Join-Path $moduleRoot 'xTestClassResource\xTestClassResource.psd1')
-
-        $userPath = Invoke-PSDscInEngineScope {
-            Get-DscSchemaCacheUserPath -ModuleName $args[0].Name -ModuleVersion $args[0].Version -Fingerprint (Get-DscModuleFingerprint -Module $args[0])
-        } $module
+        $isolated = New-PSDscIsolatedTestModule -Name xTestClassResource -Version '1.5' `
+            -Destination (Join-Path $TestDrive 'generated-module')
 
         try
         {
-            $cache = Invoke-PSDscInEngineScope { New-DscSchemaCacheForModule -Module $args[0] } $module
+            $isolated.UserCachePath | Should -Not -Exist
 
-            $userPath | Should -Exist
+            $cache = Invoke-PSDscInEngineScope { New-DscSchemaCacheForModule -Module $args[0] } @($isolated.Module)
+
+            $isolated.UserCachePath | Should -Exist
             $cache.module.name | Should -Be 'xTestClassResource'
             @($cache.keywords).Count | Should -Be 5
         }
         finally
         {
-            Remove-Item -Path $userPath -Force -ErrorAction Ignore
+            Remove-Item -Path $isolated.UserCachePath -Force -ErrorAction Ignore
         }
     }
 }
 
 Describe 'Stale schema cache handling in the fast host' {
+    BeforeAll {
+        $script:StaleModule = New-PSDscIsolatedTestModule -Name xTestClassResource -Version '1.8' `
+            -Destination (Join-Path $TestDrive 'stale-cache-module')
+        $script:StaleOriginalModulePath = $env:PSModulePath
+        $env:PSModulePath = $script:StaleModule.Root + [System.IO.Path]::PathSeparator + $env:PSModulePath
+        Reset-PSDscFastHostState
+    }
+
+    AfterAll {
+        Remove-Item -Path $script:StaleModule.UserCachePath -Force -ErrorAction Ignore
+        $env:PSModulePath = $script:StaleOriginalModulePath
+        Reset-PSDscFastHostState
+    }
+
     It 'warns about a stale cache and still compiles' {
         $doctoredPath = Join-Path $TestDrive 'doctored-cache.json'
-        $null = Export-DscSchemaCache -ModuleName xTestClassResource -OutputPath $doctoredPath
+        $null = Export-DscSchemaCache -Module $script:StaleModule.Module -OutputPath $doctoredPath
         $cache = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($doctoredPath))
         $cache.module.fingerprint = '1:1'
         $json = ConvertTo-Json -InputObject $cache -Depth 12 -Compress
         [System.IO.File]::WriteAllText($doctoredPath, $json)
+        $script:StaleModule.UserCachePath | Should -Not -Exist
 
         $text = @'
 Configuration StaleCacheCfg
 {
-    Import-DscResource -ModuleName xTestClassResource
+    Import-DscResource -ModuleName xTestClassResource -ModuleVersion '1.8'
     Node localhost
     {
         ResourceForTests1 a
@@ -322,10 +333,15 @@ Configuration StaleCacheCfg
 '@
         $warnings = $null
         $result = Invoke-DscFastCompile -ScriptText $text -SchemaCachePath $doctoredPath -OutputPath (Join-Path $TestDrive 'stale-out') -WarningVariable warnings 3>$null
+
         ($warnings -join ' ') | Should -Match 'stale'
         $result.Exists | Should -Be $true
         $mofText = [System.IO.File]::ReadAllText($result.FullName)
         $mofText | Should -Match 'instance of ResourceForTests1'
         $mofText | Should -Match 'Prop1 = "stale"'
+    }
+
+    It 'regenerated the cache it could not use' {
+        $script:StaleModule.UserCachePath | Should -Exist
     }
 }

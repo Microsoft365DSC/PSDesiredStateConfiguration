@@ -578,28 +578,17 @@ Configuration NextLineBraceCfg
     }
 
     It 'generates a schema cache for a module that has none yet' {
-        $moduleRoot = Join-Path $TestDrive 'fresh-cache-module'
-        $null = New-Item -ItemType Directory -Path $moduleRoot -Force
-        Copy-Item -Path (Join-Path $PSScriptRoot 'TestModules\xTestClassResource') -Destination $moduleRoot -Recurse -Force
-        Add-Content -Path (Join-Path $moduleRoot 'xTestClassResource\xTestClassResource.psm1') -Value '# fresh cache copy'
-
-        # A higher version than the installed copy, so the fast host resolves this one no
-        # matter in which order PSModulePath is searched.
-        $manifestPath = Join-Path $moduleRoot 'xTestClassResource\xTestClassResource.psd1'
-        [System.IO.File]::WriteAllText($manifestPath, ([System.IO.File]::ReadAllText($manifestPath) -replace "ModuleVersion = '1.0'", "ModuleVersion = '1.1'"))
+        $isolated = New-PSDscIsolatedTestModule -Name xTestClassResource -Version '1.6' `
+            -Destination (Join-Path $TestDrive 'fresh-cache-module')
 
         $originalModulePath = $env:PSModulePath
-        $env:PSModulePath = $moduleRoot + [System.IO.Path]::PathSeparator + $env:PSModulePath
-        $module = Get-Module -ListAvailable (Join-Path $moduleRoot 'xTestClassResource\xTestClassResource.psd1')
-        $userPath = Invoke-PSDscInEngineScope {
-            Get-DscSchemaCacheUserPath -ModuleName $args[0].Name -ModuleVersion $args[0].Version -Fingerprint (Get-DscModuleFingerprint -Module $args[0])
-        } $module
-        Invoke-PSDscInEngineScope { $script:FastHostRegisteredModules = @{} }
+        $env:PSModulePath = $isolated.Root + [System.IO.Path]::PathSeparator + $env:PSModulePath
+        Reset-PSDscFastHostState
 
         $text = @'
 Configuration FreshCacheCfg
 {
-    Import-DscResource -ModuleName xTestClassResource
+    Import-DscResource -ModuleName xTestClassResource -ModuleVersion '1.6'
     Node localhost
     {
         ResourceForTests1 a
@@ -611,18 +600,18 @@ Configuration FreshCacheCfg
 '@
         try
         {
-            $userPath | Should -Not -Exist
+            $isolated.UserCachePath | Should -Not -Exist
 
             $result = Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'fresh-cache-out') -NoFallback
 
-            $userPath | Should -Exist
+            $isolated.UserCachePath | Should -Exist
             (Get-Content -Path $result.FullName -Raw) | Should -Match 'Prop1 = "fresh"'
         }
         finally
         {
-            Remove-Item -Path $userPath -Force -ErrorAction Ignore
+            Remove-Item -Path $isolated.UserCachePath -Force -ErrorAction Ignore
             $env:PSModulePath = $originalModulePath
-            Invoke-PSDscInEngineScope { $script:FastHostRegisteredModules = @{} }
+            Reset-PSDscFastHostState
         }
     }
 }

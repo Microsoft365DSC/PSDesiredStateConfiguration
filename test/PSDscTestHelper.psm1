@@ -94,6 +94,78 @@ function Import-PSDscEngine
         Import-Module -Name $script:EngineManifest -Force -Global
     }
 
+    Reset-PSDscFastHostState
+}
+
+<#
+.SYNOPSIS
+    Copies a bundled test resource module to its own location under a version of its own.
+
+.DESCRIPTION
+    The fast host remembers which module versions it already registered keywords for, keyed by
+    module name, and it looks a schema cache up in the module folder and in a per user folder
+    whose name carries the module version. A suite that needs to observe that lookup has to work
+    with a module version no other suite can have populated, otherwise it silently reuses what an
+    earlier suite left behind. The returned object carries everything needed to put the copy on
+    PSModulePath and to clean the generated cache up again.
+
+.PARAMETER Name
+    Name of the module under test/TestModules to copy.
+
+.PARAMETER Version
+    Version to stamp the copied manifest with. Must be unique across the suites.
+
+.PARAMETER Destination
+    Directory to copy the module folder into. It becomes the PSModulePath entry.
+#>
+function New-PSDscIsolatedTestModule
+{
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [System.String]
+        $Name,
+
+        [Parameter(Mandatory = $true)]
+        [System.String]
+        $Version,
+
+        [Parameter(Mandatory = $true)]
+        [System.String]
+        $Destination
+    )
+
+    $null = New-Item -ItemType Directory -Path $Destination -Force
+    Copy-Item -Path (Join-Path -Path $PSScriptRoot -ChildPath "TestModules\$Name") -Destination $Destination -Recurse -Force
+
+    $manifestPath = Join-Path -Path $Destination -ChildPath "$Name\$Name.psd1"
+    $manifest = [System.IO.File]::ReadAllText($manifestPath) -replace "ModuleVersion\s*=\s*'[^']*'", "ModuleVersion = '$Version'"
+    [System.IO.File]::WriteAllText($manifestPath, $manifest)
+
+    $module = Get-Module -ListAvailable -Name $manifestPath
+    $userCachePath = Invoke-PSDscInEngineScope {
+        Get-DscSchemaCacheUserPath -ModuleName $args[0].Name -ModuleVersion $args[0].Version `
+            -Fingerprint (Get-DscModuleFingerprint -Module $args[0])
+    } @($module)
+
+    [PSCustomObject]@{
+        Name          = $Name
+        Root          = $Destination
+        ManifestPath  = $manifestPath
+        Module        = $module
+        UserCachePath = $userCachePath
+    }
+}
+
+<#
+.SYNOPSIS
+    Clears the fast host keyword registration the previous compilations left in the engine.
+#>
+function Reset-PSDscFastHostState
+{
+    [OutputType([void])]
+    param ()
+
     Invoke-PSDscInEngineScope {
         $script:FastHostRegisteredModules = @{}
         $script:FastHostKeywords = $null
@@ -351,6 +423,8 @@ Export-ModuleMember -Function @(
     'Add-PSDscTestModulePath'
     'Restore-PSDscTestModulePath'
     'Import-PSDscEngine'
+    'New-PSDscIsolatedTestModule'
+    'Reset-PSDscFastHostState'
     'Invoke-PSDscInEngineScope'
     'Invoke-PSDscConfigurationText'
     'Get-PSDscDiagnosticText'
