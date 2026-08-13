@@ -1,4 +1,5 @@
 *.pester.xml
 *.DS_Store
 TestResults/
+CodeCov.xml
 .claude/

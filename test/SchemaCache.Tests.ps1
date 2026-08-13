@@ -1,36 +1,27 @@
 BeforeAll {
-    $script:PSDscTestRoot = $PSScriptRoot
-    $script:PSDscRepoRoot = Split-Path $PSScriptRoot -Parent
-    $script:PSDscModuleUnderTestManifest = @(
-        (Join-Path $script:PSDscRepoRoot 'M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
-    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-
-    function Import-PSDscModuleUnderTest
-    {
-        Get-Module -Name M365DSC.PSDesiredStateConfiguration | Remove-Module -Force
-        Import-Module $script:PSDscModuleUnderTestManifest -Force
-    }
-
-    $script:PSDscOriginalPSModulePath = $env:PSModulePath
-    $compatRoot = Join-Path (Split-Path $script:PSDscModuleUnderTestManifest -Parent) 'Compat'
-    $separator = [System.IO.Path]::PathSeparator
-    $env:PSModulePath = (Join-Path $script:PSDscTestRoot 'TestModules') + $separator + $compatRoot + $separator + $env:PSModulePath
+    Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath 'PSDscTestHelper.psm1') -Force
+    Add-PSDscTestModulePath
+    Import-PSDscEngine
 
     function ConvertFrom-PSDscKeywordSchemaObject
     {
         param ($SchemaObject)
 
-        & (Get-Module -Name M365DSC.PSDesiredStateConfiguration) { ConvertFrom-DscKeywordSchemaObject -SchemaObject $args[0] } $SchemaObject
+        Invoke-PSDscInEngineScope { ConvertFrom-DscKeywordSchemaObject -SchemaObject $args[0] } $SchemaObject
     }
 
-    Import-PSDscModuleUnderTest
+    function Copy-PSDscTestModule
+    {
+        param ([string] $Name, [string] $Destination)
+
+        $null = New-Item -ItemType Directory -Path $Destination -Force
+        Copy-Item -Path (Join-Path $PSScriptRoot "TestModules\$Name") -Destination $Destination -Recurse -Force
+        Join-Path $Destination $Name
+    }
 }
 
 AfterAll {
-    if ($script:PSDscOriginalPSModulePath)
-    {
-        $env:PSModulePath = $script:PSDscOriginalPSModulePath
-    }
+    Restore-PSDscTestModulePath
 }
 
 Describe 'Export-DscSchemaCache' {
@@ -56,6 +47,15 @@ Describe 'Export-DscSchemaCache' {
         @($script:Cache.keywords).Count | Should -Be 5
         $embedded = $script:Cache.keywords | Where-Object { $_.keyword -eq 'EmbClass' }
         $embedded.nameMode | Should -Be 'NoName'
+    }
+
+    It 'records a source hash for every module file' {
+        $files = @($script:Cache.module.sourceHash.PSObject.Properties)
+        ($files.Name | Sort-Object) -join ',' | Should -Be 'xTestClassResource.psd1,xTestClassResource.psm1'
+        foreach ($file in $files)
+        {
+            $file.Value | Should -Match '^[0-9A-F]{64}$'
+        }
     }
 
     It 'round-trips every keyword through ConvertFrom-DscKeywordSchemaObject' {
@@ -85,14 +85,45 @@ Describe 'Export-DscSchemaCache' {
         $keyword.Properties['Ensure'].ValueMap['Present'] | Should -Be 'Present'
         $keyword.Properties['Ensure'].ValueMap['Absent'] | Should -Be 'Absent'
     }
+
+    It 'writes next to the module when no output path is given' {
+        $modulePath = Copy-PSDscTestModule -Name xTestClassResource -Destination (Join-Path $TestDrive 'default-output')
+        $module = Get-Module -ListAvailable (Join-Path $modulePath 'xTestClassResource.psd1')
+
+        $summary = Export-DscSchemaCache -Module $module
+
+        $summary.Path | Should -Be (Join-Path $modulePath 'DscSchemaCache.json')
+        $summary.Path | Should -Exist
+    }
+
+    It 'creates the output directory when it does not exist' {
+        $cachePath = Join-Path $TestDrive 'created\nested\cache.json'
+
+        $null = Export-DscSchemaCache -ModuleName xTestClassResource -OutputPath $cachePath
+
+        $cachePath | Should -Exist
+    }
+
+    It 'selects the requested module version' {
+        $summary = Export-DscSchemaCache -ModuleName xTestClassResource -RequiredVersion '1.0' -OutputPath (Join-Path $TestDrive 'versioned-cache.json')
+
+        $summary.ModuleVersion | Should -Be ([version]'1.0')
+    }
+
+    It 'throws when the requested module version is not installed' {
+        { Export-DscSchemaCache -ModuleName xTestClassResource -RequiredVersion '99.0' -OutputPath (Join-Path $TestDrive 'missing-version.json') } |
+            Should -Throw -ExpectedMessage "*version 99.0 was not found*"
+    }
+
+    It 'throws when the module is not installed' {
+        { Export-DscSchemaCache -ModuleName 'xTestModuleThatDoesNotExist' -OutputPath (Join-Path $TestDrive 'missing-module.json') } |
+            Should -Throw -ExpectedMessage "*was not found*"
+    }
 }
 
 Describe 'Test-DscSchemaCache' {
     BeforeAll {
-        $copyRoot = Join-Path $TestDrive 'CopyMods'
-        $null = New-Item -ItemType Directory -Path $copyRoot -Force
-        Copy-Item -Path (Join-Path $script:PSDscTestRoot 'TestModules\xTestClassResource') -Destination $copyRoot -Recurse
-        $script:CopyDirectory = Join-Path $copyRoot 'xTestClassResource'
+        $script:CopyDirectory = Copy-PSDscTestModule -Name xTestClassResource -Destination (Join-Path $TestDrive 'CopyMods')
         $copyModule = Get-Module -ListAvailable (Join-Path $script:CopyDirectory 'xTestClassResource.psd1')
         $script:CopyCachePath = Join-Path $TestDrive 'copy-cache.json'
         $null = Export-DscSchemaCache -Module $copyModule -OutputPath $script:CopyCachePath
@@ -102,28 +133,191 @@ Describe 'Test-DscSchemaCache' {
         Test-DscSchemaCache -ModulePath $script:CopyDirectory -CachePath $script:CopyCachePath | Should -Be $true
     }
 
+    It 'accepts a manifest path instead of a module directory' {
+        Test-DscSchemaCache -ModulePath (Join-Path $script:CopyDirectory 'xTestClassResource.psd1') -CachePath $script:CopyCachePath | Should -Be $true
+    }
+
+    It 'returns false with a warning when the cache file is missing' {
+        $warnings = $null
+        $result = Test-DscSchemaCache -ModulePath $script:CopyDirectory -CachePath (Join-Path $TestDrive 'absent-cache.json') -WarningVariable warnings 3>$null
+
+        $result | Should -Be $false
+        ($warnings -join ' ') | Should -Match 'does not exist'
+    }
+
+    It 'returns false with a warning for a newer cache format' {
+        $futurePath = Join-Path $TestDrive 'future-format.json'
+        $cache = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($script:CopyCachePath))
+        $cache.formatVersion = 99
+        [System.IO.File]::WriteAllText($futurePath, (ConvertTo-Json -InputObject $cache -Depth 12 -Compress))
+
+        $warnings = $null
+        $result = Test-DscSchemaCache -ModulePath $script:CopyDirectory -CachePath $futurePath -WarningVariable warnings 3>$null
+
+        $result | Should -Be $false
+        ($warnings -join ' ') | Should -Match 'newer than supported'
+    }
+
+    It 'returns false with a warning when the module version moved on' {
+        $otherVersionPath = Join-Path $TestDrive 'other-version.json'
+        $cache = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($script:CopyCachePath))
+        $cache.module.version = '9.9'
+        [System.IO.File]::WriteAllText($otherVersionPath, (ConvertTo-Json -InputObject $cache -Depth 12 -Compress))
+
+        $warnings = $null
+        $result = Test-DscSchemaCache -ModulePath $script:CopyDirectory -CachePath $otherVersionPath -WarningVariable warnings 3>$null
+
+        $result | Should -Be $false
+        ($warnings -join ' ') | Should -Match 'manifest declares'
+    }
+
+    It 'returns false with a warning when a cached file was removed' {
+        $removedFilePath = Join-Path $TestDrive 'removed-file.json'
+        $cache = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($script:CopyCachePath))
+        Add-Member -InputObject $cache.module.sourceHash -MemberType NoteProperty -Name 'gone.psm1' -Value ('0' * 64)
+        [System.IO.File]::WriteAllText($removedFilePath, (ConvertTo-Json -InputObject $cache -Depth 12 -Compress))
+
+        $warnings = $null
+        $result = Test-DscSchemaCache -ModulePath $script:CopyDirectory -CachePath $removedFilePath -WarningVariable warnings 3>$null
+
+        $result | Should -Be $false
+        ($warnings -join ' ') | Should -Match 'no longer exists'
+    }
+
     It 'returns false with a warning after the module content changed' {
         Add-Content -Path (Join-Path $script:CopyDirectory 'xTestClassResource.psm1') -Value '# drift marker'
         $warnings = $null
         $result = Test-DscSchemaCache -ModulePath $script:CopyDirectory -CachePath $script:CopyCachePath -Detailed -WarningVariable warnings 3>$null
+
         $result | Should -Be $false
         ($warnings -join ' ') | Should -Match 'changed since cache generation'
     }
 }
 
+Describe 'Get-DscSchemaCache' {
+    BeforeAll {
+        $script:Module = Get-Module -ListAvailable -Name xTestClassResource | Select-Object -First 1
+        $script:ValidCachePath = Join-Path $TestDrive 'lookup-valid.json'
+        $null = Export-DscSchemaCache -Module $script:Module -OutputPath $script:ValidCachePath
+    }
+
+    It 'returns the cache from an explicitly named path' {
+        $cache = Invoke-PSDscInEngineScope {
+            Get-DscSchemaCache -Module $args[0].Module -SchemaCachePath $args[0].Candidates
+        } @{ Module = $script:Module; Candidates = @($script:ValidCachePath) }
+
+        $cache.module.name | Should -Be 'xTestClassResource'
+        @($cache.keywords).Count | Should -Be 5
+    }
+
+    It 'skips a candidate that is not valid JSON' {
+        $brokenPath = Join-Path $TestDrive 'lookup-broken.json'
+        [System.IO.File]::WriteAllText($brokenPath, '{ not json')
+
+        $cache = Invoke-PSDscInEngineScope {
+            Get-DscSchemaCache -Module $args[0].Module -SchemaCachePath $args[0].Candidates -WarningAction SilentlyContinue
+        } @{ Module = $script:Module; Candidates = @($brokenPath, $script:ValidCachePath) }
+
+        $cache.module.name | Should -Be 'xTestClassResource'
+    }
+
+    It 'skips a candidate with an unsupported format version' {
+        $futurePath = Join-Path $TestDrive 'lookup-future.json'
+        $cache = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($script:ValidCachePath))
+        $cache.formatVersion = 99
+        [System.IO.File]::WriteAllText($futurePath, (ConvertTo-Json -InputObject $cache -Depth 12 -Compress))
+
+        $result = Invoke-PSDscInEngineScope {
+            Get-DscSchemaCache -Module $args[0].Module -SchemaCachePath $args[0].Candidates -WarningAction SilentlyContinue
+        } @{ Module = $script:Module; Candidates = @($futurePath, $script:ValidCachePath) }
+
+        $result.formatVersion | Should -Be 1
+    }
+
+    It 'skips a candidate that belongs to another module' {
+        $otherModulePath = Join-Path $TestDrive 'lookup-other-module.json'
+        $cache = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($script:ValidCachePath))
+        $cache.module.name = 'SomeOtherModule'
+        [System.IO.File]::WriteAllText($otherModulePath, (ConvertTo-Json -InputObject $cache -Depth 12 -Compress))
+
+        $result = Invoke-PSDscInEngineScope {
+            Get-DscSchemaCache -Module $args[0].Module -SchemaCachePath $args[0].Candidates -WarningAction SilentlyContinue
+        } @{ Module = $script:Module; Candidates = @($otherModulePath, $script:ValidCachePath) }
+
+        $result.module.name | Should -Be 'xTestClassResource'
+    }
+
+    It 'returns nothing when every candidate is stale' {
+        # A version of its own, so no cache generated for the installed module can satisfy the
+        # lookup through the module base or the per user location.
+        $isolated = New-PSDscIsolatedTestModule -Name xTestClassResource -Version '1.7' `
+            -Destination (Join-Path $TestDrive 'lookup-isolated')
+        $isolatedModule = $isolated.Module
+
+        $stalePath = Join-Path $TestDrive 'lookup-stale.json'
+        $null = Export-DscSchemaCache -Module $isolatedModule -OutputPath $stalePath
+        $cache = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($stalePath))
+        $cache.module.fingerprint = '1:1'
+        [System.IO.File]::WriteAllText($stalePath, (ConvertTo-Json -InputObject $cache -Depth 12 -Compress))
+
+        $result = Invoke-PSDscInEngineScope {
+            Get-DscSchemaCache -Module $args[0].Module -SchemaCachePath $args[0].Candidates -WarningAction SilentlyContinue
+        } @{ Module = $isolatedModule; Candidates = @($stalePath) }
+
+        $result | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'New-DscSchemaCacheForModule' {
+    It 'generates and returns a cache in the per user location' {
+        $isolated = New-PSDscIsolatedTestModule -Name xTestClassResource -Version '1.5' `
+            -Destination (Join-Path $TestDrive 'generated-module')
+
+        try
+        {
+            $isolated.UserCachePath | Should -Not -Exist
+
+            $cache = Invoke-PSDscInEngineScope { New-DscSchemaCacheForModule -Module $args[0] } @($isolated.Module)
+
+            $isolated.UserCachePath | Should -Exist
+            $cache.module.name | Should -Be 'xTestClassResource'
+            @($cache.keywords).Count | Should -Be 5
+        }
+        finally
+        {
+            Remove-Item -Path $isolated.UserCachePath -Force -ErrorAction Ignore
+        }
+    }
+}
+
 Describe 'Stale schema cache handling in the fast host' {
+    BeforeAll {
+        $script:StaleModule = New-PSDscIsolatedTestModule -Name xTestClassResource -Version '1.8' `
+            -Destination (Join-Path $TestDrive 'stale-cache-module')
+        $script:StaleOriginalModulePath = $env:PSModulePath
+        $env:PSModulePath = $script:StaleModule.Root + [System.IO.Path]::PathSeparator + $env:PSModulePath
+        Reset-PSDscFastHostState
+    }
+
+    AfterAll {
+        Remove-Item -Path $script:StaleModule.UserCachePath -Force -ErrorAction Ignore
+        $env:PSModulePath = $script:StaleOriginalModulePath
+        Reset-PSDscFastHostState
+    }
+
     It 'warns about a stale cache and still compiles' {
         $doctoredPath = Join-Path $TestDrive 'doctored-cache.json'
-        $null = Export-DscSchemaCache -ModuleName xTestClassResource -OutputPath $doctoredPath
+        $null = Export-DscSchemaCache -Module $script:StaleModule.Module -OutputPath $doctoredPath
         $cache = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($doctoredPath))
         $cache.module.fingerprint = '1:1'
         $json = ConvertTo-Json -InputObject $cache -Depth 12 -Compress
         [System.IO.File]::WriteAllText($doctoredPath, $json)
+        $script:StaleModule.UserCachePath | Should -Not -Exist
 
         $text = @'
 Configuration StaleCacheCfg
 {
-    Import-DscResource -ModuleName xTestClassResource
+    Import-DscResource -ModuleName xTestClassResource -ModuleVersion '1.8'
     Node localhost
     {
         ResourceForTests1 a
@@ -139,10 +333,15 @@ Configuration StaleCacheCfg
 '@
         $warnings = $null
         $result = Invoke-DscFastCompile -ScriptText $text -SchemaCachePath $doctoredPath -OutputPath (Join-Path $TestDrive 'stale-out') -WarningVariable warnings 3>$null
+
         ($warnings -join ' ') | Should -Match 'stale'
         $result.Exists | Should -Be $true
         $mofText = [System.IO.File]::ReadAllText($result.FullName)
         $mofText | Should -Match 'instance of ResourceForTests1'
         $mofText | Should -Match 'Prop1 = "stale"'
+    }
+
+    It 'regenerated the cache it could not use' {
+        $script:StaleModule.UserCachePath | Should -Exist
     }
 }
