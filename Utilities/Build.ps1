@@ -145,18 +145,12 @@ foreach ($currentEdition in $Edition)
 if ($Test)
 {
     $testRoot = Join-Path -Path $RepositoryRoot -ChildPath 'test'
-    $suites = @(Get-ChildItem -Path $testRoot -Filter '*.Tests.ps1' | Sort-Object -Property Name)
-    $suiteList = ($suites.FullName | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ','
+    $harnessPath = Join-Path -Path $testRoot -ChildPath 'TestHarness.psm1'
+    $suites = @(Get-ChildItem -Path $testRoot -Filter '*.Tests.ps1' -Recurse)
 
     $runner = @"
-`$ErrorActionPreference = 'Stop'
-Import-Module -Name Pester -MinimumVersion 5.0
-`$env:PSModulePath = '$($testRoot.Replace("'", "''"))\TestModules' + [System.IO.Path]::PathSeparator + `$env:PSModulePath
-`$configuration = New-PesterConfiguration
-`$configuration.Run.Path = @($suiteList)
-`$configuration.Run.PassThru = `$true
-`$configuration.Output.Verbosity = 'Normal'
-`$result = Invoke-Pester -Configuration `$configuration
+Import-Module -Name '$($harnessPath.Replace("'", "''"))' -Force
+`$result = Invoke-TestHarness -IgnoreCodeCoverage
 'RESULT:{0}:{1}' -f `$result.PassedCount, `$result.FailedCount
 "@
 
