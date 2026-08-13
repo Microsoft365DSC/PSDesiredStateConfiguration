@@ -558,6 +558,41 @@ Configuration ParameterizedCfg
         (Get-Content -Path $result.FullName -Raw) | Should -Match 'Prop1 = "from-parameter"'
     }
 
+    It 'keeps the property values of two configurations whose property blocks share their offsets apart' {
+        $first = @'
+Configuration OffsetTwinOneCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        ResourceForTests1 a
+        {
+            Prop1 = 'first'
+        }
+    }
+}
+'@
+        $second = @'
+Configuration OffsetTwinTwoCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        ResourceForTests1 a
+        {
+            Prop1 = 'other'
+        }
+    }
+}
+'@
+        $firstResult = Invoke-DscFastCompile -ScriptText $first -OutputPath (Join-Path $TestDrive 'offset-twin-one') -NoFallback
+        $secondResult = Invoke-DscFastCompile -ScriptText $second -OutputPath (Join-Path $TestDrive 'offset-twin-two') -NoFallback
+
+        (Get-Content -Path $firstResult.FullName -Raw) | Should -Match 'Prop1 = "first"'
+        (Get-Content -Path $secondResult.FullName -Raw) | Should -Match 'Prop1 = "other"'
+        (Get-Content -Path $secondResult.FullName -Raw) | Should -Not -Match 'Prop1 = "first"'
+    }
+
     It 'joins a resource statement with a property block on the next line' {
         $text = @'
 Configuration NextLineBraceCfg
