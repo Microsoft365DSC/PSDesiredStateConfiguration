@@ -370,6 +370,66 @@ function Get-PSDscComparableMofLine
 
 <#
 .SYNOPSIS
+    Runs a script block in a fresh runspace whose host discards ShouldProcess feedback.
+
+.DESCRIPTION
+    "What if:" and "Confirm:" feedback that ShouldProcess emits is written straight to the
+    host, outside every redirectable stream, so Pester cannot capture it. A freshly created
+    runspace gets a default host that does not surface that output, which lets a test that
+    deliberately invokes -WhatIf run without leaking noise onto the console. The script
+    block runs in a clean session, so it must import any module it uses itself.
+
+.PARAMETER ScriptBlock
+    The script block to run. Arguments from ArgumentList bind to its parameters.
+
+.PARAMETER ArgumentList
+    Arguments passed to the script block, bound positionally.
+#>
+function Invoke-PSDscQuiet
+{
+    [OutputType([System.Object[]])]
+    param
+    (
+        [Parameter(Mandatory = $true, Position = 0)]
+        [System.Management.Automation.ScriptBlock]
+        $ScriptBlock,
+
+        [Parameter(Position = 1)]
+        [System.Object[]]
+        $ArgumentList
+    )
+
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace([System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault())
+    $runspace.Open()
+    try
+    {
+        $pipeline = [System.Management.Automation.PowerShell]::Create()
+        try
+        {
+            $pipeline.Runspace = $runspace
+            $null = $pipeline.AddScript($ScriptBlock.ToString())
+            if ($ArgumentList)
+            {
+                foreach ($argument in $ArgumentList)
+                {
+                    $null = $pipeline.AddArgument($argument)
+                }
+            }
+            return $pipeline.Invoke()
+        }
+        finally
+        {
+            $pipeline.Dispose()
+        }
+    }
+    finally
+    {
+        $runspace.Dispose()
+    }
+}
+
+<#
+.SYNOPSIS
     Creates a document encryption certificate and exports its public key.
 
 .DESCRIPTION
@@ -431,4 +491,5 @@ Export-ModuleMember -Function @(
     'Get-PSDscCompilationDiagnostic'
     'Get-PSDscComparableMofLine'
     'New-PSDscDocumentEncryptionCertificate'
+    'Invoke-PSDscQuiet'
 )

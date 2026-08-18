@@ -82,7 +82,12 @@ Describe 'New-DscChecksum' {
     }
 
     It 'writes nothing with -WhatIf' {
-        New-DscChecksum -Path $script:SourceDirectory -WhatIf
+        Invoke-PSDscQuiet -ScriptBlock {
+            param($ManifestPath, $SourceDirectory)
+
+            Import-Module -Name $ManifestPath -Force
+            New-DscChecksum -Path $SourceDirectory -WhatIf
+        } -ArgumentList @((Get-PSDscEngineManifest), $script:SourceDirectory)
 
         "$($script:MofPath).checksum" | Should -Not -Exist
     }
