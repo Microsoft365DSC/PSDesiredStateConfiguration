@@ -1068,6 +1068,7 @@ Describe 'Coverage: CIM keyword implementation via direct invocation' {
 
             $sb = {
                 param($kKeyword, $kResourceName, $kNameMode, $kImplementingModule, $kProps, $kValue, $kName, $kDriver, $kSource)
+                $ErrorActionPreference = 'Continue'
                 Initialize-ConfigurationRuntimeState
                 Set-PSCurrentConfigurationNode $kDriver.node
                 if ($null -ne $kDriver.node) {
@@ -1544,6 +1545,7 @@ Describe 'Coverage: psm1 engine internals via direct invocation' {
                 try {
                     Invoke-PSDscInEngineScope {
                         Initialize-ConfigurationRuntimeState
+                        $ErrorActionPreference = 'Continue'
                         $script:FastHostActive = $false
                         $script:FastHostValidateMof = $false
                         $script:PSDefaultConfigurationDocument = $args[2]
@@ -1633,6 +1635,7 @@ Describe 'Coverage: psm1 engine internals via direct invocation' {
                 try {
                     Invoke-PSDscInEngineScope {
                         Initialize-ConfigurationRuntimeState
+                        $ErrorActionPreference = 'Continue'
                         $script:FastHostActive = $false
                         $script:FastHostValidateMof = $false
                         $script:PSDefaultConfigurationDocument = $null
@@ -1827,8 +1830,17 @@ configuration BadMkdirCfg
 '@
             Invoke-Expression -Command $text
 
-            $diag = Get-PSDscDiagnosticText {
-                BadMkdirCfg -OutputPath (Join-Path $TestDrive 'bad<name>')
+            $previousEap = $global:ErrorActionPreference
+            $global:ErrorActionPreference = 'Continue'
+            try
+            {
+                $diag = Get-PSDscDiagnosticText {
+                    BadMkdirCfg -OutputPath (Join-Path $TestDrive 'bad<name>')
+                }
+            }
+            finally
+            {
+                $global:ErrorActionPreference = $previousEap
             }
 
             $diag | Should -Match 'valid path segment'
