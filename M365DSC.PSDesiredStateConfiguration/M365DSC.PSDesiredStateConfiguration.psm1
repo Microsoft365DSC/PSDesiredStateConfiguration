@@ -19,6 +19,8 @@ data LocalizedData
     NoValidConfigFileFound = No valid config files (mof,zip) were found.
     InputFileNotExist=File {0} doesn't exist.
     FileReadError=Error Reading file {0}.
+    FilePathError=Error Reading environment data file path {0}.
+    EnvironmentContentError=Error Reading environment data file {0}.
     MatchingFileNotFound=No matching file found.
     CertificateFileReadError=Error Reading certificate file {0}.
     CertificateStoreReadError=Error Reading certificate store for {0}.

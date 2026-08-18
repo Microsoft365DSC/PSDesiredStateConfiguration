@@ -237,6 +237,38 @@ Configuration VariableCfg
         $result.Reason | Should -Match 'Unsupported Import-DscResource form'
     }
 
+    It 'reports an array -ModuleName with a variable element as unsupported' {
+        $text = @'
+Configuration VariableArrayCfg
+{
+    Import-DscResource -ModuleName @('a', $someVar)
+    ResourceForTests1 a
+    {
+        Prop1 = 'x'
+    }
+}
+'@
+        $result = Get-PSDscStripResult -Text $text
+        $result.Supported | Should -Be $false
+        $result.Reason | Should -Match 'Unsupported Import-DscResource form'
+    }
+
+    It 'reports an unknown parameter as unsupported' {
+        $text = @'
+Configuration UnknownParamCfg
+{
+    Import-DscResource -ModuleName xTestClassResource -Bogus 42
+    ResourceForTests1 a
+    {
+        Prop1 = 'x'
+    }
+}
+'@
+        $result = Get-PSDscStripResult -Text $text
+        $result.Supported | Should -Be $false
+        $result.Reason | Should -Match 'Unsupported Import-DscResource form'
+    }
+
     It 'reports -Name without -ModuleName as unsupported' {
         $text = @'
 Configuration NameOnlyCfg
