@@ -345,6 +345,49 @@ Configuration FastParityCfg
         @($difference).Count | Should -Be 0
     }
 
+    It 'merges a nested CIM instance written with a next-line brace' {
+        # 'PropertyName = KeywordName' parses as a single command inside a configuration
+        # body, not as an assignment. The merge has to look past the property name to
+        # find the keyword. Without that, the next-line brace stays a separate statement
+        # and the engine reports the embedded type as an unknown command.
+        $text = @'
+Configuration NestedBraceCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        xTestClassResource r1
+        {
+            Name = 'r1'
+            Value = 'v1'
+            EmbClassObj = EmbClass
+            {
+                EmbClassStr1 = 'emb1'
+            }
+            EmbClassObjArray = @(
+                EmbClass
+                {
+                    EmbClassStr1 = 'arr1'
+                }
+            )
+        }
+    }
+}
+'@
+        $fast = Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'nested-fast') -NoFallback
+        @($fast).Count | Should -Be 1
+        $fast.Exists | Should -Be $true
+
+        Invoke-Expression $text
+        $standard = NestedBraceCfg -OutputPath (Join-Path $TestDrive 'nested-std')
+        $standard.Exists | Should -Be $true
+
+        $fastLines = Get-PSDscNormalizedMofLine -Path $fast.FullName
+        $standardLines = Get-PSDscNormalizedMofLine -Path $standard.FullName
+        $difference = Compare-Object -ReferenceObject @($standardLines) -DifferenceObject @($fastLines)
+        @($difference).Count | Should -Be 0
+    }
+
     It 'compiles a self-invoking script file passed via -Path' {
         $outputDirectory = Join-Path $TestDrive 'self-out'
         $scriptPath = Join-Path $TestDrive 'SelfInvoke.ps1'

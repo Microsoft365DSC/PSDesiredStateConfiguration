@@ -120,6 +120,74 @@ function Register-DscCachedKeywords
     }
 }
 
+# Returns the keyword a next-line brace would belong to, or $null. There are two possible ways
+# for such a keyword to appear:
+#
+#   KeywordName [InstanceName]        - a resource statement
+#   PropertyName = KeywordName        - a nested CIM instance inside a resource body
+#
+# The second shape is not an assignment. It is inside a configuration body, and 'PropertyName' is a
+# bare word, so the parser produces one CommandAst whose elements are the property name,
+# a literal '=' and the keyword.
+function Get-FastHostMergeCandidateKeyword
+{
+    [OutputType([System.Object])]
+    param (
+        [Parameter(Mandatory)]
+        [System.Management.Automation.Language.StatementAst]
+        $Statement
+    )
+
+    $pipeline = $Statement -as [System.Management.Automation.Language.PipelineAst]
+    if ($null -eq $pipeline)
+    {
+        $assignment = $Statement -as [System.Management.Automation.Language.AssignmentStatementAst]
+        if ($null -eq $assignment)
+        {
+            return $null
+        }
+
+        $pipeline = $assignment.Right -as [System.Management.Automation.Language.PipelineAst]
+    }
+
+    if ($null -eq $pipeline -or $pipeline.PipelineElements.Count -ne 1)
+    {
+        return $null
+    }
+
+    $command = $pipeline.PipelineElements[0] -as [System.Management.Automation.Language.CommandAst]
+    if ($null -eq $command)
+    {
+        return $null
+    }
+
+    $elements = $command.CommandElements
+    if ($elements.Count -le 2)
+    {
+        return [pscustomobject]@{
+            Name      = $command.GetCommandName()
+            EndOffset = $command.Extent.EndOffset
+        }
+    }
+
+    # 'PropertyName = KeywordName [InstanceName]'
+    if ($elements.Count -le 4 -and $elements[1].Extent.Text -eq '=')
+    {
+        $keywordElement = $elements[2] -as [System.Management.Automation.Language.StringConstantExpressionAst]
+        if ($null -eq $keywordElement)
+        {
+            return $null
+        }
+
+        return [pscustomobject]@{
+            Name      = $keywordElement.Value
+            EndOffset = $command.Extent.EndOffset
+        }
+    }
+
+    return $null
+}
+
 # Joins 'KeywordName [InstanceName] <newline> { ... }' into one statement. With the
 # keyword unknown to the parser, a next-line brace parses as a separate scriptblock
 # statement and the engine rejects the resource as undefined.
@@ -148,17 +216,8 @@ function Merge-FastHostResourceStatements
         for ($i = 0; $i -lt $statements.Count - 1; $i++)
         {
             $first = $statements[$i]
-            if ($first -isnot [System.Management.Automation.Language.PipelineAst] -or $first.PipelineElements.Count -ne 1)
-            {
-                continue
-            }
-            $command = $first.PipelineElements[0] -as [System.Management.Automation.Language.CommandAst]
-            if ($null -eq $command -or $command.CommandElements.Count -gt 2)
-            {
-                continue
-            }
-            $commandName = $command.GetCommandName()
-            if (-not $commandName -or -not $KeywordNames.Contains($commandName))
+            $candidate = Get-FastHostMergeCandidateKeyword -Statement $first
+            if ($null -eq $candidate -or -not $candidate.Name -or -not $KeywordNames.Contains($candidate.Name))
             {
                 continue
             }
@@ -172,7 +231,7 @@ function Merge-FastHostResourceStatements
             {
                 continue
             }
-            $gapStart = $command.Extent.EndOffset
+            $gapStart = $candidate.EndOffset
             $gapLength = $second.Extent.StartOffset - $gapStart
             if ($gapLength -gt 0)
             {
