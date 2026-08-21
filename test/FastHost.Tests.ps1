@@ -388,6 +388,31 @@ Configuration NestedBraceCfg
         @($difference).Count | Should -Be 0
     }
 
+    It 'resolves each module spec once and reuses it on later compiles' {
+        $text = @'
+Configuration ResolveCacheCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        ResourceForTests1 a
+        {
+            Prop1 = 'cached'
+        }
+    }
+}
+'@
+        Invoke-PSDscInEngineScope { $script:FastHostResolvedModules = @{} }
+
+        $null = Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'resolve-1') -NoFallback
+        $cached = Invoke-PSDscInEngineScope { @($script:FastHostResolvedModules.Keys) }
+        $cached | Should -Contain 'xTestClassResource|'
+
+        # A second compile must still work off the cached entry.
+        $second = Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'resolve-2') -NoFallback
+        $second.Exists | Should -Be $true
+    }
+
     It 'compiles a self-invoking script file passed via -Path' {
         $outputDirectory = Join-Path $TestDrive 'self-out'
         $scriptPath = Join-Path $TestDrive 'SelfInvoke.ps1'

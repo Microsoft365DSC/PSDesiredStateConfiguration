@@ -5,7 +5,7 @@ This is the [Microsoft365DSC](https://github.com/microsoft/Microsoft365DSC) fork
 a DSC configuration compiler tuned for very large class-based resource modules such as Microsoft365DSC
 (>530 class-based resources). It compiles DSC `Configuration` scripts into MOF documents.
 
-Current version: **3.1.2**, dual-edition - the same module runs on **Windows PowerShell 5.1** (Desktop)
+Current version: **3.1.3**, dual-edition - the same module runs on **Windows PowerShell 5.1** (Desktop)
 and **PowerShell 7** (Core).
 
 The fork is rebased onto the upstream v2.0.7 pure-script lineage, with a couple of patches from the v3.0-beta commits.
