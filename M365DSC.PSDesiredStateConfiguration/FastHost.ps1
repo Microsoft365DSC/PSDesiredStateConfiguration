@@ -80,15 +80,13 @@ function Get-FastHostBodyScriptBlock
         $Body
     )
 
-    $extent = $Body.Ast.Extent
-    $cacheKey = "$($extent.File):$($extent.StartOffset):$($extent.EndOffset)"
-    $cached = $script:FastHostBodyCache[$cacheKey]
+    $text = $Body.Ast.Extent.Text
+    $cached = $script:FastHostBodyCache[$text]
     if ($null -eq $cached)
     {
-        $text = $extent.Text
         $inner = $text.Substring(1, $text.Length - 2)
         $cached = [scriptblock]::Create('@{' + $inner + '}')
-        $script:FastHostBodyCache[$cacheKey] = $cached
+        $script:FastHostBodyCache[$text] = $cached
     }
     $cached
 }

@@ -19,6 +19,8 @@ data LocalizedData
     NoValidConfigFileFound = No valid config files (mof,zip) were found.
     InputFileNotExist=File {0} doesn't exist.
     FileReadError=Error Reading file {0}.
+    FilePathError=Error Reading environment data file path {0}.
+    EnvironmentContentError=Error Reading environment data file {0}.
     MatchingFileNotFound=No matching file found.
     CertificateFileReadError=Error Reading certificate file {0}.
     CertificateStoreReadError=Error Reading certificate store for {0}.
@@ -97,8 +99,13 @@ function Get-CimKeywordImplementationFunction
 
     if ($null -eq $script:CimKeywordImplementationFunction)
     {
-        $driverText = [System.IO.File]::ReadAllText("$PSScriptRoot\CimKeywordImplementationFunction.ps1")
-        $script:CimKeywordImplementationFunction = [scriptblock]::Create($driverText)
+        # Parsed from the file rather than from its text so that errors raised inside the
+        # driver point at the real file and line.
+        $tokens = $null
+        $parseErrors = $null
+        $driverPath = Join-Path -Path $PSScriptRoot -ChildPath 'CimKeywordImplementationFunction.ps1'
+        $driverAst = [System.Management.Automation.Language.Parser]::ParseFile($driverPath, [ref] $tokens, [ref] $parseErrors)
+        $script:CimKeywordImplementationFunction = $driverAst.GetScriptBlock()
     }
     $script:CimKeywordImplementationFunction
 }
@@ -1862,7 +1869,7 @@ function Test-ModuleReloadRequired
     {
         if ($schemaFileLastUpdate.ContainsKey($SchemaFilePath))
         {
-            $schemaFileLastUpdate.Remove($SchemaFilePath)
+            $null = $schemaFileLastUpdate.Remove($SchemaFilePath)
         }
         return $false
     }
@@ -3586,13 +3593,9 @@ function Get-PublicKeyFromFile
 
     try
     {
-        $cert = New-Object -TypeName System.Security.Cryptography.X509Certificates.X509Certificate2
-
-        if($cert)
-        {
-            $cert.Import($certificatefile)
-            $cert
-        }
+        # X509Certificate2 is immutable on .NET Core. The certificate has to be loaded
+        # through the constructor instead of through Import().
+        New-Object -TypeName System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList $certificatefile
     }
     catch
     {

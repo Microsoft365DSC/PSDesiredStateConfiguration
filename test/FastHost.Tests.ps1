@@ -1,29 +1,20 @@
 BeforeAll {
-    $script:PSDscTestRoot = $PSScriptRoot
-    $script:PSDscRepoRoot = Split-Path $PSScriptRoot -Parent
-    $script:PSDscModuleUnderTestManifest = @(
-        (Join-Path $script:PSDscRepoRoot 'M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1')
-    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-
-    function Import-PSDscModuleUnderTest
-    {
-        Get-Module -Name M365DSC.PSDesiredStateConfiguration | Remove-Module -Force
-        Import-Module $script:PSDscModuleUnderTestManifest -Force
-    }
+    Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath 'PSDscTestHelper.psm1') -Force
 
     # Test resource modules are resolved by name at parse time, so TestModules must be
     # on the path. The module under test claims the engine-qualified Configuration name
     # itself when imported, so its own location only matters for out-of-process runs.
-    $script:PSDscOriginalPSModulePath = $env:PSModulePath
-    $compatRoot = Join-Path (Split-Path $script:PSDscModuleUnderTestManifest -Parent) 'Compat'
-    $separator = [System.IO.Path]::PathSeparator
-    $env:PSModulePath = (Join-Path $script:PSDscTestRoot 'TestModules') + $separator + $compatRoot + $separator + $env:PSModulePath
+    Add-PSDscTestModulePath
+    Import-PSDscEngine
+
+    $script:PSDscRepoRoot = Get-PSDscRepositoryRoot
+    $script:PSDscModuleUnderTestManifest = Get-PSDscEngineManifest
 
     function Get-PSDscStripResult
     {
         param ([string]$Text)
 
-        & (Get-Module -Name M365DSC.PSDesiredStateConfiguration) { Get-StrippedConfigurationText -Text $args[0] } $Text
+        Invoke-PSDscInEngineScope { Get-StrippedConfigurationText -Text $args[0] } $Text
     }
 
     # SourceInfo carries source line numbers, which shift when the fast host merges a
@@ -32,20 +23,12 @@ BeforeAll {
     {
         param ([string]$Path)
 
-        Get-Content -Path $Path |
-            ForEach-Object { $_.Trim() } |
-            Where-Object { $_ -and $_ -notmatch '^SourceInfo' } |
-            Sort-Object
+        Get-PSDscComparableMofLine -Path $Path
     }
-
-    Import-PSDscModuleUnderTest
 }
 
 AfterAll {
-    if ($script:PSDscOriginalPSModulePath)
-    {
-        $env:PSModulePath = $script:PSDscOriginalPSModulePath
-    }
+    Restore-PSDscTestModulePath
 }
 
 Describe 'Fast host contract' {
@@ -254,6 +237,38 @@ Configuration VariableCfg
         $result.Reason | Should -Match 'Unsupported Import-DscResource form'
     }
 
+    It 'reports an array -ModuleName with a variable element as unsupported' {
+        $text = @'
+Configuration VariableArrayCfg
+{
+    Import-DscResource -ModuleName @('a', $someVar)
+    ResourceForTests1 a
+    {
+        Prop1 = 'x'
+    }
+}
+'@
+        $result = Get-PSDscStripResult -Text $text
+        $result.Supported | Should -Be $false
+        $result.Reason | Should -Match 'Unsupported Import-DscResource form'
+    }
+
+    It 'reports an unknown parameter as unsupported' {
+        $text = @'
+Configuration UnknownParamCfg
+{
+    Import-DscResource -ModuleName xTestClassResource -Bogus 42
+    ResourceForTests1 a
+    {
+        Prop1 = 'x'
+    }
+}
+'@
+        $result = Get-PSDscStripResult -Text $text
+        $result.Supported | Should -Be $false
+        $result.Reason | Should -Match 'Unsupported Import-DscResource form'
+    }
+
     It 'reports -Name without -ModuleName as unsupported' {
         $text = @'
 Configuration NameOnlyCfg
@@ -444,5 +459,393 @@ Configuration MultiNodeFastCfg
             $content | Should -Match ('Prop1 = "' + $nodeName + '"')
             $content | Should -Match 'Prop1 = "fixed"'
         }
+    }
+
+    It 'honours a pinned module version' {
+        $text = @'
+Configuration PinnedVersionCfg
+{
+    Import-DscResource -ModuleName xTestClassResource -ModuleVersion '1.0'
+    Node localhost
+    {
+        ResourceForTests1 a
+        {
+            Prop1 = 'pinned'
+        }
+    }
+}
+'@
+        $result = Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'pinned-version') -NoFallback
+
+        $result.Exists | Should -Be $true
+        (Get-Content -Path $result.FullName -Raw) | Should -Match 'Prop1 = "pinned"'
+    }
+
+    It 'falls back when the pinned module version is not installed' {
+        $text = @'
+Configuration MissingVersionCfg
+{
+    Import-DscResource -ModuleName xTestClassResource -ModuleVersion '99.0'
+    Node localhost
+    {
+        ResourceForTests1 a
+        {
+            Prop1 = 'x'
+        }
+    }
+}
+'@
+        { Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'missing-version') -NoFallback } |
+            Should -Throw -ExpectedMessage "*version 99.0 was not found*"
+    }
+
+    It 'falls back when the module is not installed at all' {
+        $text = @'
+Configuration MissingModuleCfg
+{
+    Import-DscResource -ModuleName xTestModuleThatDoesNotExist
+    Node localhost
+    {
+        ResourceForTests1 a
+        {
+            Prop1 = 'x'
+        }
+    }
+}
+'@
+        { Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'missing-module') -NoFallback } |
+            Should -Throw -ExpectedMessage "*'xTestModuleThatDoesNotExist' was not found*"
+    }
+
+    It 'compiles the requested configuration when the script defines several' {
+        $text = @'
+Configuration FirstOfTwoCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    ResourceForTests1 a
+    {
+        Prop1 = 'first'
+    }
+}
+
+Configuration SecondOfTwoCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    ResourceForTests1 a
+    {
+        Prop1 = 'second'
+    }
+}
+'@
+        $result = Invoke-DscFastCompile -ScriptText $text -ConfigurationName SecondOfTwoCfg `
+            -OutputPath (Join-Path $TestDrive 'second-of-two') -NoFallback
+
+        (Get-Content -Path $result.FullName -Raw) | Should -Match 'Prop1 = "second"'
+    }
+
+    It 'requires a configuration name when the script defines several' {
+        $text = @'
+Configuration AmbiguousOneCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    ResourceForTests1 a
+    {
+        Prop1 = 'one'
+    }
+}
+
+Configuration AmbiguousTwoCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    ResourceForTests1 a
+    {
+        Prop1 = 'two'
+    }
+}
+'@
+        { Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'ambiguous-name') -NoFallback } |
+            Should -Throw -ExpectedMessage '*specify -ConfigurationName*'
+    }
+
+    It 'passes configuration parameters through -Parameters' {
+        $text = @'
+Configuration ParameterizedCfg
+{
+    param
+    (
+        [string]
+        $Marker
+    )
+
+    Import-DscResource -ModuleName xTestClassResource
+    ResourceForTests1 a
+    {
+        Prop1 = $Marker
+    }
+}
+'@
+        $result = Invoke-DscFastCompile -ScriptText $text -Parameters @{ Marker = 'from-parameter' } `
+            -OutputPath (Join-Path $TestDrive 'parameterized') -NoFallback
+
+        (Get-Content -Path $result.FullName -Raw) | Should -Match 'Prop1 = "from-parameter"'
+    }
+
+    It 'keeps the property values of two configurations whose property blocks share their offsets apart' {
+        $first = @'
+Configuration OffsetTwinOneCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        ResourceForTests1 a
+        {
+            Prop1 = 'first'
+        }
+    }
+}
+'@
+        $second = @'
+Configuration OffsetTwinTwoCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        ResourceForTests1 a
+        {
+            Prop1 = 'other'
+        }
+    }
+}
+'@
+        $firstResult = Invoke-DscFastCompile -ScriptText $first -OutputPath (Join-Path $TestDrive 'offset-twin-one') -NoFallback
+        $secondResult = Invoke-DscFastCompile -ScriptText $second -OutputPath (Join-Path $TestDrive 'offset-twin-two') -NoFallback
+
+        (Get-Content -Path $firstResult.FullName -Raw) | Should -Match 'Prop1 = "first"'
+        (Get-Content -Path $secondResult.FullName -Raw) | Should -Match 'Prop1 = "other"'
+        (Get-Content -Path $secondResult.FullName -Raw) | Should -Not -Match 'Prop1 = "first"'
+    }
+
+    It 'joins a resource statement with a property block on the next line' {
+        $text = @'
+Configuration NextLineBraceCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        ResourceForTests1 a
+        {
+            Prop1 = 'next-line'
+        }
+    }
+}
+'@
+        $result = Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'next-line-brace') -NoFallback
+
+        (Get-Content -Path $result.FullName -Raw) | Should -Match 'Prop1 = "next-line"'
+    }
+
+    It 'generates a schema cache for a module that has none yet' {
+        $isolated = New-PSDscIsolatedTestModule -Name xTestClassResource -Version '1.6' `
+            -Destination (Join-Path $TestDrive 'fresh-cache-module')
+
+        $originalModulePath = $env:PSModulePath
+        $env:PSModulePath = $isolated.Root + [System.IO.Path]::PathSeparator + $env:PSModulePath
+        Reset-PSDscFastHostState
+
+        $text = @'
+Configuration FreshCacheCfg
+{
+    Import-DscResource -ModuleName xTestClassResource -ModuleVersion '1.6'
+    Node localhost
+    {
+        ResourceForTests1 a
+        {
+            Prop1 = 'fresh'
+        }
+    }
+}
+'@
+        try
+        {
+            $isolated.UserCachePath | Should -Not -Exist
+
+            $result = Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'fresh-cache-out') -NoFallback
+
+            $isolated.UserCachePath | Should -Exist
+            (Get-Content -Path $result.FullName -Raw) | Should -Match 'Prop1 = "fresh"'
+        }
+        finally
+        {
+            Remove-Item -Path $isolated.UserCachePath -Force -ErrorAction Ignore
+            $env:PSModulePath = $originalModulePath
+            Reset-PSDscFastHostState
+        }
+    }
+}
+
+Describe 'Fast host resource adapter' {
+    It 'reports a resource keyword that the schema cache does not know' {
+        $text = @'
+Configuration UnknownKeywordCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        ResourceForTests1 a
+        {
+            Prop1 = 'x'
+        }
+        xTestResourceThatIsNotCached b
+        {
+            Prop1 = 'y'
+        }
+    }
+}
+'@
+        $diagnostics = Get-PSDscDiagnosticText {
+            Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'unknown-keyword') -NoFallback
+        }
+
+        $diagnostics | Should -Match 'xTestResourceThatIsNotCached'
+    }
+
+    It 'reports a resource statement without an instance name' {
+        $text = @'
+Configuration NamelessResourceCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        ResourceForTests1
+        {
+            Prop1 = 'x'
+        }
+    }
+}
+'@
+        $diagnostics = Get-PSDscDiagnosticText {
+            Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'nameless-resource') -NoFallback
+        }
+
+        $diagnostics | Should -Match 'instance name'
+    }
+
+    It 'reports a value outside the value map of a property' {
+        $text = @'
+Configuration FastBadValueMapCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        xTestClassResource a
+        {
+            Name = 'n'
+            Value = 'v'
+            Ensure = 'Perhaps'
+        }
+    }
+}
+'@
+        $diagnostics = Get-PSDscDiagnosticText {
+            Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'fast-bad-valuemap') -NoFallback
+        }
+
+        $diagnostics | Should -Match 'Perhaps'
+    }
+
+    It 'reports two resources sharing one resource id' {
+        $text = @'
+Configuration FastDuplicateIdCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        ResourceForTests1 same
+        {
+            Prop1 = 'first'
+        }
+        ResourceForTests1 same
+        {
+            Prop1 = 'second'
+        }
+    }
+}
+'@
+        $diagnostics = Get-PSDscDiagnosticText {
+            Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'fast-duplicate-id') -NoFallback
+        }
+
+        $diagnostics | Should -Match "A duplicate resource identifier '\[ResourceForTests1\]same' was found"
+    }
+
+    It 'reports a malformed DependsOn reference' {
+        $text = @'
+Configuration FastBadDependsOnCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        ResourceForTests1 a
+        {
+            Prop1 = 'x'
+            DependsOn = 'ResourceForTests2b'
+        }
+    }
+}
+'@
+        $diagnostics = Get-PSDscDiagnosticText {
+            Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'fast-bad-dependson') -NoFallback
+        }
+
+        $diagnostics | Should -Match "resource reference 'ResourceForTests2b'"
+        Join-Path $TestDrive 'fast-bad-dependson\localhost.mof' | Should -Not -Exist
+    }
+
+    It 'reports two resources with identical keys but different non-key values' {
+        $text = @'
+Configuration FastConflictingCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        xTestClassResource first
+        {
+            Name = 'shared-key'
+            Value = 'one'
+        }
+        xTestClassResource second
+        {
+            Name = 'shared-key'
+            Value = 'two'
+        }
+    }
+}
+'@
+        $diagnostics = Get-PSDscDiagnosticText {
+            Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'fast-conflicting') -NoFallback
+        }
+
+        $diagnostics | Should -Match 'A conflict was detected between resources'
+    }
+
+    It 'reports a missing mandatory property at compile time' {
+        $text = @'
+Configuration FastMissingMandatoryCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        xTestClassResource a
+        {
+            Name = 'only-the-key'
+        }
+    }
+}
+'@
+        $diagnostics = Get-PSDscDiagnosticText {
+            Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'fast-missing-mandatory') -NoFallback
+        }
+
+        $diagnostics | Should -Match 'Value'
     }
 }
