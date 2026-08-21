@@ -1,5 +1,5 @@
 #
-# Module manifest for module 'PowerShellDSC'
+# Module manifest for module 'M365DSC.PSDesiredStateConfiguration'
 #
 # Copyright="(c) Microsoft Corporation. All rights reserved."
 #
@@ -9,7 +9,7 @@
     RootModule = 'M365DSC.PSDesiredStateConfiguration.psm1'
 
     # Version number of this module.
-    ModuleVersion = '3.1.2'
+    ModuleVersion = '3.1.3'
 
     # Supported PSEditions
     CompatiblePSEditions = @('Desktop', 'Core')

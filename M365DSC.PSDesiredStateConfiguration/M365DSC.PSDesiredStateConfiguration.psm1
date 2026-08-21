@@ -92,6 +92,7 @@ $script:FastHostKeywords = $null
 $script:FastHostAdapters = $null
 $script:FastHostBodyCache = @{}
 $script:FastHostRegisteredModules = @{}
+$script:FastHostResolvedModules = @{}
 function Get-CimKeywordImplementationFunction
 {
     [OutputType([scriptblock])]

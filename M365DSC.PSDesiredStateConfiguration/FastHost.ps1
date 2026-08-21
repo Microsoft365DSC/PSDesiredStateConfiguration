@@ -456,12 +456,22 @@ function Invoke-DscFastCompile
     {
         foreach ($spec in $stripResult.ModuleSpecs)
         {
-            $candidates = Get-Module -ListAvailable -Name $spec.ModuleName | Sort-Object -Property Version -Descending
-            if ($spec.ModuleVersion)
+            $specKey = "$($spec.ModuleName)|$($spec.ModuleVersion)"
+            $module = $script:FastHostResolvedModules[$specKey]
+            if ($null -eq $module)
             {
-                $candidates = $candidates | Where-Object { $_.Version -eq $spec.ModuleVersion }
+                $candidates = Get-Module -ListAvailable -Name $spec.ModuleName | Sort-Object -Property Version -Descending
+                if ($spec.ModuleVersion)
+                {
+                    $candidates = $candidates | Where-Object { $_.Version -eq $spec.ModuleVersion }
+                }
+                $module = $candidates | Select-Object -First 1
+                if ($null -ne $module)
+                {
+                    $script:FastHostResolvedModules[$specKey] = $module
+                }
             }
-            $module = $candidates | Select-Object -First 1
+
             if (-not $module)
             {
                 $fallbackReason = "Module '$($spec.ModuleName)' $(if ($spec.ModuleVersion) { "version $($spec.ModuleVersion) " })was not found."
