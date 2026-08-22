@@ -8,6 +8,10 @@ class EmbClass
 {
     [DscProperty()]
     [string] $EmbClassStr1
+
+    # Collides with the built-in User keyword. Only parses when the body is a hashtable.
+    [DscProperty()]
+    [string] $User
 }
 
 [DscResource()]
@@ -18,6 +22,10 @@ class xTestClassResource
 
     [DscProperty(Mandatory)]
     [string] $Value
+
+    # Collides with the built-in Settings keyword.
+    [DscProperty()]
+    [string] $Settings
 
     [DscProperty()]
     [Ensure] $Ensure
