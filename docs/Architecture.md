@@ -128,12 +128,12 @@ sequenceDiagram
         F->>S: generate live (once), persist to the user cache
     end
     F->>F: rebuild DynamicKeyword objects, register adapters
-    F->>F: join next-line braces to their resource statements
+    F->>F: join next-line braces, rewrite bodies to hashtable literals
     F->>C: create scriptblock (no import fires) and invoke
     C->>C: merge adapters into functionsToDefine
     loop each resource statement
         C->>A: plain command call
-        A->>A: evaluate property block as a hashtable<br/>in the caller's scope
+        A->>A: read the hashtable property block
         A->>D: same driver as the standard path
     end
     D-->>Caller: .mof files
@@ -156,14 +156,19 @@ seconds for a Microsoft365DSC configuration). The workaround is length-preservin
 With the imports stripped, resource keywords are unknown to the parser, so `AADGroup "Name" { ... }`
 compiles to an ordinary command call: the resource name, an instance name, and a scriptblock. The fast
 host defines a function for each cached keyword, injected through the same `functionsToDefine`
-dictionary the engine uses for real keywords. The adapter evaluates the property block as a hashtable in
-the caller's scope, so `$ConfigurationData`, `$AllNodes`, `$Node` and user variables resolve normally,
-then calls the same driver function as the standard path. Everything downstream, including `DependsOn`,
-embedded instances, credentials and conflict detection, is shared code.
+dictionary the engine uses for real keywords. The adapter receives the property block as a hashtable
+evaluated in the caller's scope, so `$ConfigurationData`, `$AllNodes`, `$Node` and user variables
+resolve normally, then calls the same driver function as the standard path. Everything downstream,
+including `DependsOn`, embedded instances, credentials and conflict detection, is shared code.
 
-One wrinkle: a resource whose opening brace is on the **next** line (the Microsoft365DSC export style)
-would parse as two unrelated statements. `Merge-FastHostResourceStatements` joins them first, using the
-same masked-AST technique.
+Two wrinkles, both handled by the same masked-AST technique:
+
+- A resource whose opening brace is on the **next** line (the Microsoft365DSC export style) would
+  parse as two unrelated statements. `Merge-FastHostResourceStatements` joins them first.
+- DSC registers resource keywords with `BodyMode = Hashtable`, so the real parser reads a body as a
+  hashtable and a property may be named `User`, `Settings`, `Script` and so on. Left as a scriptblock
+  those names are still live built-in keywords and the assignment is a syntax error, so
+  `Convert-FastHostBodyToHashtable` rewrites every keyword body to a hashtable literal afterwards.
 
 MOF validation (`ValidateInstanceText`) needs live CIM classes, which the cache-driven path does not
 register, so it is skipped unless `-ValidateMof` is passed.

@@ -413,6 +413,60 @@ Configuration ResolveCacheCfg
         $second.Exists | Should -Be $true
     }
 
+    It 'compiles property names that collide with built-in DSC keywords' {
+        $text = @'
+Configuration ReservedNameCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        xTestClassResource r1
+        {
+            Name = 'r1'
+            Value = 'v1'
+            Settings = 'top-level'
+            EmbClassObj = EmbClass { User = 'same-line' }
+            EmbClassObjArray = @(
+                EmbClass
+                {
+                    User = 'next-line'
+                }
+            )
+        }
+    }
+}
+'@
+        $fast = Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'reserved-fast') -NoFallback
+        $fast.Exists | Should -Be $true
+
+        Invoke-Expression $text
+        $standard = ReservedNameCfg -OutputPath (Join-Path $TestDrive 'reserved-std')
+        $standard.Exists | Should -Be $true
+
+        $difference = Compare-Object -ReferenceObject @(Get-PSDscNormalizedMofLine -Path $standard.FullName) `
+            -DifferenceObject @(Get-PSDscNormalizedMofLine -Path $fast.FullName)
+        @($difference).Count | Should -Be 0
+    }
+
+    It 'rewrites the body of every built-in keyword name to a hashtable literal' {
+        $reserved = @(
+            'Archive', 'Configuration', 'Environment', 'File', 'Group', 'Log', 'Node', 'Package'
+            'Registry', 'Script', 'Service', 'Settings', 'User', 'WaitForAll', 'WaitForAny'
+            'WaitForSome', 'WindowsFeature', 'WindowsOptionalFeature', 'WindowsProcess'
+        )
+
+        foreach ($name in $reserved)
+        {
+            $text = 'Configuration C { Node localhost { ResourceForTests1 a { ' + $name + ' = "v" } } }'
+            $converted = Invoke-PSDscInEngineScope {
+                $merged = Merge-FastHostResourceStatements -Text $args[0] -KeywordNames @('ResourceForTests1')
+                Convert-FastHostBodyToHashtable -Text $merged -KeywordNames @('ResourceForTests1')
+            } $text
+
+            { [scriptblock]::Create($converted) } | Should -Not -Throw -Because '$name must survive the rewrite'
+        }
+    }
+
     It 'compiles a self-invoking script file passed via -Path' {
         $outputDirectory = Join-Path $TestDrive 'self-out'
         $scriptPath = Join-Path $TestDrive 'SelfInvoke.ps1'

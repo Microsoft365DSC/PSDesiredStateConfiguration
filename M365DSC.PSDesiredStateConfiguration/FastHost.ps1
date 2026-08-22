@@ -13,7 +13,7 @@ if ($null -eq $__fhKeyword)
 {
     throw "The DSC resource '$__fhKeywordName' is not present in the schema cache."
 }
-if ($args.Count -lt 1 -or $args[$args.Count - 1] -isnot [scriptblock])
+if ($args.Count -lt 1)
 {
     throw "Resource '$__fhKeywordName': expected a { } property block as the last argument."
 }
@@ -31,12 +31,11 @@ elseif ($args.Count -ge 2 -and $args[0] -is [string])
 {
     $__fhName = $args[0]
 }
-$__fhValueScriptBlock = Get-FastHostBodyScriptBlock -Body $__fhBody
-$__fhValue = . $__fhValueScriptBlock
-if ($__fhValue -isnot [hashtable])
+if ($__fhBody -isnot [hashtable])
 {
-    throw "Resource '$__fhKeywordName': the property block could not be evaluated as a set of 'Name = Value' assignments."
+    throw "Resource '$__fhKeywordName': the property block reached the adapter as $($__fhBody.GetType().Name) instead of a hashtable. Convert-FastHostBodyToHashtable did not rewrite it."
 }
+$__fhValue = $__fhBody
 $__fhFile = $MyInvocation.ScriptName
 if ([string]::IsNullOrEmpty($__fhFile))
 {
@@ -227,7 +226,9 @@ function Merge-FastHostResourceStatements
                 continue
             }
             $expression = $second.PipelineElements[0] -as [System.Management.Automation.Language.CommandExpressionAst]
-            if ($null -eq $expression -or $expression.Expression -isnot [System.Management.Automation.Language.ScriptBlockExpressionAst])
+            if ($null -eq $expression -or
+                ($expression.Expression -isnot [System.Management.Automation.Language.ScriptBlockExpressionAst] -and
+                 $expression.Expression -isnot [System.Management.Automation.Language.HashtableAst]))
             {
                 continue
             }
@@ -247,6 +248,74 @@ function Merge-FastHostResourceStatements
     $Text
 }
 
+function Get-FastHostBodyKeywordName
+{
+    [OutputType([string])]
+    param (
+        [Parameter(Mandatory)]
+        [System.Management.Automation.Language.CommandAst]
+        $Command
+    )
+
+    $elements = $Command.CommandElements
+    if ($elements.Count -ge 3 -and $elements[1].Extent.Text -eq '=')
+    {
+        $keyword = $elements[2] -as [System.Management.Automation.Language.StringConstantExpressionAst]
+        if ($null -eq $keyword)
+        {
+            return $null
+        }
+
+        return $keyword.Value
+    }
+
+    return $Command.GetCommandName()
+}
+
+function Convert-FastHostBodyToHashtable
+{
+    [OutputType([string])]
+    param (
+        [Parameter(Mandatory)]
+        [string]
+        $Text,
+
+        [Parameter(Mandatory)]
+        $KeywordNames
+    )
+
+    $masked = [regex]::Replace($Text, '(?i)\bConfiguration\b', 'C0nfiguration')
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($masked, [ref]$null, [ref]$null)
+
+    $offsets = New-Object -TypeName 'System.Collections.Generic.List[int]'
+    $commands = $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.CommandAst] }, $true)
+    foreach ($command in $commands)
+    {
+        $elements = $command.CommandElements
+        $body = $elements[$elements.Count - 1] -as [System.Management.Automation.Language.ScriptBlockExpressionAst]
+        if ($null -eq $body)
+        {
+            continue
+        }
+
+        $name = Get-FastHostBodyKeywordName -Command $command
+        if (-not $name -or -not $KeywordNames.Contains($name))
+        {
+            continue
+        }
+
+        $offsets.Add($body.Extent.StartOffset)
+    }
+
+    foreach ($offset in ($offsets | Sort-Object -Descending))
+    {
+        # 'MSFT_Type @{' parses, 'MSFT_Type@{' does not
+        # Keep a separator when the source had none
+        $prefix = if ($offset -gt 0 -and -not [char]::IsWhiteSpace($Text[$offset - 1])) { ' @' } else { '@' }
+        $Text = $Text.Insert($offset, $prefix)
+    }
+    $Text
+}
 function Get-StrippedConfigurationText
 {
     param (
@@ -531,6 +600,7 @@ function Invoke-DscFastCompile
     if ($script:FastHostKeywords -and $script:FastHostKeywords.Count -gt 0)
     {
         $compileText = Merge-FastHostResourceStatements -Text $compileText -KeywordNames $script:FastHostKeywords.Keys
+        $compileText = Convert-FastHostBodyToHashtable -Text $compileText -KeywordNames $script:FastHostKeywords.Keys
     }
 
     $script:FastHostActive = $true

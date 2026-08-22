@@ -128,8 +128,8 @@ Describe 'All types DSC resource tests' {
     It 'Check all property types in Get-DscResource' {
         $resource = Get-DscResource -Module xTestClassResource | Where-Object { $_.Name -eq 'xTestClassResource' }
         $resource | Should -Not -BeNullOrEmpty
-        # 33 declared properties + the OMI_BaseResource common properties DependsOn and PsDscRunAsCredential
-        $resource.Properties.Count | Should -Be 35
+        # 34 declared properties + the OMI_BaseResource common properties DependsOn and PsDscRunAsCredential
+        $resource.Properties.Count | Should -Be 36
 
         foreach ($dscResourcePropertyInfo in $resource.Properties)
         {
@@ -137,6 +137,7 @@ Describe 'All types DSC resource tests' {
             {
                 'Name' { $dscResourcePropertyInfo.PropertyType | Should -Be '[string]' }
                 'Value' { $dscResourcePropertyInfo.PropertyType | Should -Be '[string]' }
+                'Settings' { $dscResourcePropertyInfo.PropertyType | Should -Be '[string]' }
                 'bValue' { $dscResourcePropertyInfo.PropertyType | Should -Be '[bool]' }
                 'sArray' { $dscResourcePropertyInfo.PropertyType | Should -Be '[string[]]' }
                 'bValueArray' { $dscResourcePropertyInfo.PropertyType | Should -Be '[bool[]]' }
