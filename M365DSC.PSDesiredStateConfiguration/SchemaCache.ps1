@@ -281,6 +281,47 @@ function Test-DscSchemaCache
 }
 Export-ModuleMember -Function Test-DscSchemaCache
 
+function Get-DscSchemaCacheSourceFingerprint
+{
+    [OutputType([string])]
+    param (
+        [Parameter(Mandatory)]
+        [string]
+        $ModuleBase,
+
+        [Parameter(Mandatory)]
+        $Cache
+    )
+
+    if ($null -eq $Cache.module.sourceHash)
+    {
+        return $null
+    }
+
+    $entries = @($Cache.module.sourceHash.PSObject.Properties)
+    if ($entries.Count -eq 0)
+    {
+        return $null
+    }
+
+    $maxTicks = [long]0
+    foreach ($entry in $entries)
+    {
+        $file = Join-Path $ModuleBase $entry.Name
+        if (-not [System.IO.File]::Exists($file))
+        {
+            return $null
+        }
+        $ticks = [System.IO.File]::GetLastWriteTimeUtc($file).Ticks
+        if ($ticks -gt $maxTicks)
+        {
+            $maxTicks = $ticks
+        }
+    }
+
+    "$($entries.Count):$maxTicks"
+}
+
 function Get-DscSchemaCache
 {
     param (
@@ -326,9 +367,14 @@ function Get-DscSchemaCache
             Write-Warning -Message "Schema cache '$candidate' is for $($cache.module.name) $($cache.module.version), not $($Module.Name) $($Module.Version)."
             continue
         }
-        if ($cache.module.fingerprint -ne $fingerprint)
+        $recorded = Get-DscSchemaCacheSourceFingerprint -ModuleBase $Module.ModuleBase -Cache $cache
+        if ($null -eq $recorded)
         {
-            Write-Warning -Message "Schema cache '$candidate' is stale (module files changed)."
+            $recorded = $fingerprint
+        }
+        if ($cache.module.fingerprint -ne $recorded)
+        {
+            Write-Verbose -Message "Schema cache '$candidate' is stale (module files changed)."
             continue
         }
         return $cache

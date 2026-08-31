@@ -266,6 +266,56 @@ Describe 'Get-DscSchemaCache' {
 
         $result | Should -BeNullOrEmpty
     }
+
+    It 'does not warn about a stale candidate' {
+        $isolated = New-PSDscIsolatedTestModule -Name xTestClassResource -Version '1.9' `
+            -Destination (Join-Path $TestDrive 'lookup-no-warning')
+
+        $stalePath = Join-Path $TestDrive 'lookup-no-warning.json'
+        $null = Export-DscSchemaCache -Module $isolated.Module -OutputPath $stalePath
+        $cache = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($stalePath))
+        $cache.module.fingerprint = '1:1'
+        [System.IO.File]::WriteAllText($stalePath, (ConvertTo-Json -InputObject $cache -Depth 12 -Compress))
+
+        $streams = Invoke-PSDscInEngineScope {
+            Get-DscSchemaCache -Module $args[0].Module -SchemaCachePath $args[0].Candidates
+        } @{ Module = $isolated.Module; Candidates = @($stalePath) } 3>&1
+
+        @($streams | Where-Object { $_ -is [System.Management.Automation.WarningRecord] }) | Should -BeNullOrEmpty
+    }
+
+    It 'returns the cache when a file appeared after the cache was generated' {
+        $isolated = New-PSDscIsolatedTestModule -Name xTestClassResource -Version '2.0' `
+            -Destination (Join-Path $TestDrive 'lookup-extra-file')
+
+        $cachePath = Join-Path $TestDrive 'lookup-extra-file.json'
+        $null = Export-DscSchemaCache -Module $isolated.Module -OutputPath $cachePath
+
+        Set-Content -Path (Join-Path $isolated.Module.ModuleBase 'Leftover.psm1') -Value 'function Get-Leftover { }'
+
+        $result = Invoke-PSDscInEngineScope {
+            Get-DscSchemaCache -Module $args[0].Module -SchemaCachePath $args[0].Candidates -WarningAction SilentlyContinue
+        } @{ Module = $isolated.Module; Candidates = @($cachePath) }
+
+        $result.module.name | Should -Be 'xTestClassResource'
+        @($result.keywords).Count | Should -Be 5
+    }
+
+    It 'returns nothing when a recorded file no longer exists' {
+        $isolated = New-PSDscIsolatedTestModule -Name xTestClassResource -Version '2.1' `
+            -Destination (Join-Path $TestDrive 'lookup-missing-file')
+
+        $cachePath = Join-Path $TestDrive 'lookup-missing-file.json'
+        $null = Export-DscSchemaCache -Module $isolated.Module -OutputPath $cachePath
+
+        Remove-Item -Path (Join-Path $isolated.Module.ModuleBase 'xTestClassResource.psm1') -Force
+
+        $result = Invoke-PSDscInEngineScope {
+            Get-DscSchemaCache -Module $args[0].Module -SchemaCachePath $args[0].Candidates -WarningAction SilentlyContinue
+        } @{ Module = $isolated.Module; Candidates = @($cachePath) }
+
+        $result | Should -BeNullOrEmpty
+    }
 }
 
 Describe 'New-DscSchemaCacheForModule' {
@@ -305,7 +355,7 @@ Describe 'Stale schema cache handling in the fast host' {
         Reset-PSDscFastHostState
     }
 
-    It 'warns about a stale cache and still compiles' {
+    It 'compiles without warning when the cache is stale' {
         $doctoredPath = Join-Path $TestDrive 'doctored-cache.json'
         $null = Export-DscSchemaCache -Module $script:StaleModule.Module -OutputPath $doctoredPath
         $cache = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($doctoredPath))
@@ -334,7 +384,7 @@ Configuration StaleCacheCfg
         $warnings = $null
         $result = Invoke-DscFastCompile -ScriptText $text -SchemaCachePath $doctoredPath -OutputPath (Join-Path $TestDrive 'stale-out') -WarningVariable warnings 3>$null
 
-        ($warnings -join ' ') | Should -Match 'stale'
+        $warnings | Should -BeNullOrEmpty
         $result.Exists | Should -Be $true
         $mofText = [System.IO.File]::ReadAllText($result.FullName)
         $mofText | Should -Match 'instance of ResourceForTests1'
