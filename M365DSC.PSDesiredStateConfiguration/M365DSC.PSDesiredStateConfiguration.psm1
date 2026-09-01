@@ -2625,9 +2625,6 @@ function ImportCimAndScriptKeywordsFromModule
 }
 
 #
-# Writes a MOF document to disk with a deterministic encoding (UTF-8 without
-# BOM) on both Windows PowerShell 5.1 and PowerShell 7.
-#
 # Builds the OMI_ConfigurationDocument instance that closes a document.
 function New-ConfigurationDocumentInstance
 {
@@ -2655,6 +2652,10 @@ function New-ConfigurationDocumentInstance
     " Name=`"$(Get-PSTopConfigurationName)`";`n};"
 }
 
+#
+# Writes a MOF document to disk as UTF-16LE with a BOM. The MI MOF parser decodes a
+# document without a UTF-16 BOM as Latin-1, which corrupts every non-ASCII character.
+#
 function Write-MofDocumentFile
 {
     param(
@@ -2668,7 +2669,7 @@ function Write-MofDocumentFile
     )
 
     $resolvedPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
-    [System.IO.File]::WriteAllText($resolvedPath, ($Content + "`r`n"), [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText($resolvedPath, ($Content + "`r`n"), [System.Text.UnicodeEncoding]::new($false, $true))
 }
 
 #
