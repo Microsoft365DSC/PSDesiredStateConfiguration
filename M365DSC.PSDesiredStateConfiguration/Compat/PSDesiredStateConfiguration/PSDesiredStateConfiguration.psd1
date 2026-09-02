@@ -6,7 +6,7 @@
 
     RootModule = 'PSDesiredStateConfiguration.psm1'
 
-    ModuleVersion = '3.1.6'
+    ModuleVersion = '3.1.7'
 
     CompatiblePSEditions = @('Desktop', 'Core')
 
@@ -30,6 +30,7 @@
             'Invoke-DscFastCompile'
             'Export-DscSchemaCache'
             'Test-DscSchemaCache'
+            'Get-DscFastCompileTiming'
         )
 
     CmdletsToExport = @()

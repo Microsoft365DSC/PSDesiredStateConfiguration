@@ -487,7 +487,7 @@ SelfInvokeCfg -OutputPath '$outputDirectory'
         (Get-Content -Path $result.FullName -Raw) | Should -Match 'instance of ResourceForTests1'
     }
 
-    It 'falls back with a warning for a script-based resource module and still produces the MOF' {
+    It 'compiles a schema based resource module through the fast path' {
         $text = @'
 Configuration FallbackScriptCfg
 {
@@ -504,10 +504,11 @@ Configuration FallbackScriptCfg
 }
 '@
         $warnings = $null
-        $result = Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'fallback-script') -WarningVariable warnings 3>$null
-        ($warnings -join ' ') | Should -Match 'Falling back to standard compilation'
+        $result = Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'fallback-script') -NoFallback -WarningVariable warnings 3>$null
+        $warnings | Should -BeNullOrEmpty
         $result.Exists | Should -Be $true
         (Get-Content -Path $result.FullName -Raw) | Should -Match 'MSFT_xTestScriptResource'
+        (Get-Content -Path $result.FullName -Raw) | Should -Match 'Items = \{'
     }
 
     It 'falls back with a warning for a composite resource module and still produces the MOF' {
@@ -969,5 +970,136 @@ Configuration FastMissingMandatoryCfg
         }
 
         $diagnostics | Should -Match 'Value'
+    }
+}
+
+Describe 'Fast host module resolution and rewrite' {
+    BeforeAll {
+        Reset-PSDscFastHostState
+    }
+
+    AfterAll {
+        Reset-PSDscFastHostState
+    }
+
+    It 'resolves an installed module from the manifest alone' {
+        $module = Invoke-PSDscInEngineScope { Resolve-FastHostModule -ModuleName 'xTestClassResource' }
+
+        $module.Name | Should -Be 'xTestClassResource'
+        $module.Version | Should -Be ([version]'1.0')
+        $module.Path | Should -Be (Join-Path $module.ModuleBase 'xTestClassResource.psd1')
+        $module.Path | Should -Exist
+    }
+
+    It 'returns nothing for a version that is not installed' {
+        Invoke-PSDscInEngineScope { Resolve-FastHostModule -ModuleName 'xTestClassResource' -ModuleVersion '99.0' } | Should -BeNullOrEmpty
+    }
+
+    It 'prefers the highest version folder and honors a requested one' {
+        $root = Join-Path $TestDrive 'resolve-root'
+        foreach ($version in '1.0', '2.5')
+        {
+            $folder = Join-Path $root "xVersionedProbe\$version"
+            $null = New-Item -ItemType Directory -Path $folder -Force
+            New-ModuleManifest -Path (Join-Path $folder 'xVersionedProbe.psd1') -ModuleVersion $version
+        }
+        $originalPath = $env:PSModulePath
+        $env:PSModulePath = $root + [System.IO.Path]::PathSeparator + $env:PSModulePath
+        try
+        {
+            (Invoke-PSDscInEngineScope { Resolve-FastHostModule -ModuleName 'xVersionedProbe' }).Version | Should -Be ([version]'2.5')
+            (Invoke-PSDscInEngineScope { Resolve-FastHostModule -ModuleName 'xVersionedProbe' -ModuleVersion '1.0' }).Version | Should -Be ([version]'1.0')
+        }
+        finally
+        {
+            $env:PSModulePath = $originalPath
+        }
+    }
+
+    It 'rewrites imports, next-line braces and bodies in one pass like the sequential passes' {
+        $text = @'
+Configuration OnePassCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        ResourceForTests1 a
+        {
+            Prop1 = 'x'
+        }
+        xTestClassResource b { Name = 'n'; Value = 'v'; Ensure = 'Present'; sArray = @('s') }
+    }
+}
+'@
+        $input = @{ Text = $text; Names = @('ResourceForTests1', 'xTestClassResource') }
+        $onePass = Invoke-PSDscInEngineScope {
+            $strip = Get-StrippedConfigurationText -Text $args[0].Text
+            ConvertTo-FastHostCompileText -Text $args[0].Text -Ast $strip.Ast -ImportStatement $strip.ImportStatements -KeywordNames $args[0].Names -Merge -Convert
+        } $input
+        $sequential = Invoke-PSDscInEngineScope {
+            $strip = Get-StrippedConfigurationText -Text $args[0].Text
+            $merged = Merge-FastHostResourceStatements -Text $strip.Text -KeywordNames $args[0].Names
+            Convert-FastHostBodyToHashtable -Text $merged -KeywordNames $args[0].Names
+        } $input
+
+        $onePass | Should -BeExactly $sequential
+        $onePass | Should -Not -Match 'Import-DscResource'
+        $onePass | Should -Match 'ResourceForTests1 a @\{'
+        $onePass | Should -Match 'xTestClassResource b @\{'
+    }
+
+    It 'deserializes only the keywords a compile uses' {
+        Reset-PSDscFastHostState
+        $text = @'
+Configuration LazyCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        ResourceForTests1 a { Prop1 = 'lazy' }
+    }
+}
+'@
+        $null = Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'lazy-out') -NoFallback
+
+        $materialized = @(Invoke-PSDscInEngineScope { @($script:FastHostKeywords.Keys) })
+        $materialized | Should -Contain 'ResourceForTests1'
+        $materialized | Should -Not -Contain 'xTestClassResource'
+        (Invoke-PSDscInEngineScope { (Get-FastHostKeywordName).Count }) | Should -Be 5
+    }
+
+    It 'reports stage timings for the last compile' {
+        $timing = Get-DscFastCompileTiming
+
+        @($timing.Keys) | Should -Be @('parse', 'resolve', 'cache', 'rewrite', 'compile', 'total')
+        $timing['total'] | Should -BeGreaterOrEqual $timing['compile']
+    }
+
+    It 'regenerates the cache with -Force' {
+        $module = Get-Module -ListAvailable -Name xTestClassResource | Select-Object -First 1
+        $userPath = Invoke-PSDscInEngineScope {
+            Get-DscSchemaCacheUserPath -ModuleName $args[0].Name -ModuleVersion $args[0].Version -Fingerprint (Get-DscModuleFingerprint -Module $args[0])
+        } $module
+        Remove-Item -Path $userPath -Force -ErrorAction Ignore
+        $text = @'
+Configuration ForceCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        ResourceForTests1 a { Prop1 = 'force' }
+    }
+}
+'@
+        try
+        {
+            $null = Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'force-out') -NoFallback -Force
+
+            $userPath | Should -Exist
+        }
+        finally
+        {
+            Remove-Item -Path $userPath -Force -ErrorAction Ignore
+        }
     }
 }

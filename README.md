@@ -22,7 +22,7 @@ The fork is rebased onto the upstream v2.0.7 pure-script lineage, with a couple 
 | Resource type | Standard path, Windows PowerShell 5.1 | Standard path, PowerShell 7 | Fast host |
 | --- | --- | --- | --- |
 | Class-based | Supported | Supported | Supported |
-| Script-based (`*.schema.mof`) | Supported | Supported | Automatic fallback to the standard path |
+| Script-based (`*.schema.mof`) | Supported | Supported | Supported |
 | Composite (`*.schema.psm1`) | Supported | Supported | Automatic fallback to the standard path |
 
 ## Quick start
@@ -86,7 +86,7 @@ fast host work, with diagrams, is in [docs/Architecture.md](docs/Architecture.md
 2. `%LOCALAPPDATA%\M365DSC.PSDesiredStateConfiguration\SchemaCache\<Name>_<Version>_<fingerprint>.json` - written after a live generation.
 3. Live generation (then persisted to 2).
 
-A cache is used only when its module name, version, and fingerprint match the resolved module.
+A cache is used only when its format version, module name, version, and fingerprint match the resolved module. The fingerprint is built from file names and sizes, so an installed copy keeps the cache shipped with the package.
 
 ## Coexistence with other PSDesiredStateConfiguration versions
 

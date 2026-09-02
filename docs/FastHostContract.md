@@ -29,7 +29,7 @@ Invoke-DscFastCompile
     [-ConfigurationData <hashtable|string>]
     [-OutputPath <string>]
     [-SchemaCachePath <string[]>]       # explicit cache files; otherwise resolution order below
-    [-Force]                            # regenerate a stale cache instead of treating it as missing
+    [-Force]                            # ignore every cache on disk, generate a fresh one and use it
     [-ValidateMof]                      # opt-in MI validation (requires live CIM classes, slower)
     [-NoFallback]                       # fail instead of degrading to the standard path
 ```
@@ -38,7 +38,17 @@ Returns the generated `.mof` files (`FileInfo[]`). Scripts that invoke their own
 
 While the script executes, `$Global:PSDscFastCompileActive` is `$true`. Generated export trailers use this as a recursion guard.
 
-Falls back to standard compilation (with a warning) when: an `Import-DscResource` uses non-constant arguments or `-Name` without `-ModuleName`; a module contains script-based (`*.schema.mof`) or composite (`*.schema.psm1`) resources; or no usable schema cache can be obtained.
+Modules named by `Import-DscResource` are located by scanning `$env:PSModulePath` for `<Name>\<Name>.psd1` and `<Name>\<Version>\<Name>.psd1` and reading `ModuleVersion` from the manifest. `Get-Module -ListAvailable` runs only when a cache has to be generated.
+
+Falls back to standard compilation (with a warning) when: an `Import-DscResource` uses non-constant arguments or `-Name` without `-ModuleName`; a module contains composite (`*.schema.psm1`) resources; or no usable schema cache can be obtained. Class-based resources and schema-based (`*.schema.mof`) resources compile on the fast path.
+
+### Get-DscFastCompileTiming
+
+```powershell
+Get-DscFastCompileTiming
+```
+
+Returns an ordered dictionary with the milliseconds of the last `Invoke-DscFastCompile` in this session: `parse`, `resolve`, `cache`, `rewrite`, `compile` and `total`. `$null` before the first compile.
 
 ### Export-DscSchemaCache
 
@@ -47,7 +57,7 @@ Export-DscSchemaCache -ModuleName <string> [-RequiredVersion <version>] [-Output
 Export-DscSchemaCache -Module <PSModuleInfo> [-OutputPath <string>]
 ```
 
-Discovers all class-based resources of a module (one-time engine import, ~6 s for Microsoft365DSC) and writes the schema cache JSON. Default output: `<ModuleBase>\DscSchemaCache.json`. Returns a summary (`ModuleName`, `ModuleVersion`, `ResourceCount`, `KeywordCount`, `Fingerprint`, `Path`).
+Discovers the class-based resources of a module through the engine (one-time import, ~6 s for Microsoft365DSC), reads every `DscResources\<Name>\<Name>.schema.mof`, and writes the schema cache. Default output: `<ModuleBase>\DscSchemaCache.json`. Returns a summary (`ModuleName`, `ModuleVersion`, `ResourceCount`, `KeywordCount`, `Fingerprint`, `Path`).
 
 ### Test-DscSchemaCache
 
@@ -55,54 +65,68 @@ Discovers all class-based resources of a module (one-time engine import, ~6 s fo
 Test-DscSchemaCache -ModulePath <string> -CachePath <string> [-Detailed]
 ```
 
-Returns `$true`/`$false`. Validates format version and module version; `-Detailed` re-hashes every file recorded in `sourceHash` (CI drift gate).
+Returns `$true`/`$false`. Validates format version and module version and that every recorded source file still exists; `-Detailed` re-hashes every recorded file (CI drift gate).
 
 ## Schema cache resolution order
 
-1. `<ModuleBase>\DscSchemaCache.json` - shipped inside the resource module package.
-2. `%LOCALAPPDATA%\M365DSC.PSDesiredStateConfiguration\SchemaCache\<Name>_<Version>_<fingerprint>.json` - written after a live generation.
-3. Live generation (then persisted to 2).
+1. Paths given through `-SchemaCachePath`.
+2. `<ModuleBase>\DscSchemaCache.json` - shipped inside the resource module package.
+3. `%LOCALAPPDATA%\M365DSC.PSDesiredStateConfiguration\SchemaCache\<Name>_<Version>_<fingerprint>.json` - written after a live generation.
+4. Live generation (then persisted to 3).
 
-A cache is used only when its module name, version, and fingerprint (`fileCount:maxLastWriteTimeUtcTicks` over `*.psm1|*.psd1|*.mof`) match the resolved module.
+A cache is used only when its format version is the one the reader knows, its module name and version match the resolved module, and its fingerprint matches. The fingerprint is `fileCount:totalBytes:hash` over the sorted list of relative path and size of every `*.psm1`, `*.psd1` and `*.mof` file below the module base. It carries no write times, so a copy or an installation of the same files keeps its fingerprint. When the file set below the module base grew, the fingerprint is recomputed over the files the cache recorded, so an unrelated file placed next to the module does not invalidate it.
 
-## Cache format (formatVersion 1)
+## Cache format (formatVersion 2)
+
+The file is UTF-8 without BOM, one JSON document per line.
+
+Line 1, the header:
 
 ```json
 {
-  "formatVersion": 1,
-  "generator": { "psdscVersion": "3.1.0", "psVersion": "7.4.0" },
-  "module": {
-    "name": "Microsoft365DSC",
-    "version": "1.26.805.2",
-    "fingerprint": "594:639219468181493516",
-    "sourceHash": { "Classes\\Part00.psm1": "<sha256>", "...": "..." }
-  },
-  "keywords": [
-    {
-      "keyword": "AADGroup",
-      "resourceName": "AADGroup",
-      "implementingModule": "Microsoft365DSC",
-      "implementingModuleVersion": "1.26.805.2",
-      "nameMode": "NameRequired",
-      "bodyMode": "Hashtable",
-      "directCall": false,
-      "metaStatement": false,
-      "properties": {
-        "DisplayName": {
-          "name": "DisplayName", "typeConstraint": "String",
-          "mandatory": true, "isKey": true,
-          "attributes": [], "values": [],
-          "valueMap": [ { "key": "...", "value": "..." } ]
-        }
-      }
-    }
-  ]
+  "formatVersion": 2,
+  "generator": { "psdscVersion": "3.1.7", "psVersion": "7.6.5" },
+  "module": { "name": "Microsoft365DSC", "version": "1.26.1007.1", "fingerprint": "595:10345678:bc7d0588069ae1cb" },
+  "resourceCount": 531,
+  "keywordCount": 998,
+  "index": { "AADGroup": 2, "MSFT_AADGroupMember": 3 }
 }
 ```
 
-Embedded complex types are ordinary `NoName` keywords in the same flat list. `valueMap` is an array of key/value pairs because DSC allows empty-string map keys, which JSON object properties cannot represent portably.
+`index` maps every keyword name to its zero-based line number.
 
-Consumers must reject caches with a `formatVersion` greater than the one they know and regenerate.
+Line 2, the recorded source files:
+
+```json
+{ "Classes\\Part00.psm1": { "length": 713777, "sha256": "<sha256>" } }
+```
+
+Every further line is one keyword:
+
+```json
+{
+  "keyword": "AADGroup",
+  "resourceName": "AADGroup",
+  "implementingModule": "Microsoft365DSC",
+  "implementingModuleVersion": "1.26.1007.1",
+  "nameMode": "NameRequired",
+  "bodyMode": "Hashtable",
+  "directCall": false,
+  "metaStatement": false,
+  "properties": {
+    "DisplayName": {
+      "name": "DisplayName", "typeConstraint": "String",
+      "mandatory": true, "isKey": true,
+      "attributes": [], "values": [],
+      "valueMap": [ { "key": "...", "value": "..." } ]
+    }
+  }
+}
+```
+
+Embedded complex types are ordinary `NoName` keywords. `valueMap` is an array of key/value pairs because DSC allows empty-string map keys, which JSON object properties cannot represent portably.
+
+The fast host reads the header at registration time and deserializes a keyword line the first time a compile asks for that keyword. Consumers must reject caches whose `formatVersion` differs from the one they know and regenerate.
 
 ## Module resolution requirement
 

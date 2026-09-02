@@ -5,7 +5,7 @@ BeforeAll {
 
     function Invoke-PSDscStringifyValue
     {
-        param ($Value, [bool] $AsArray = $false, [type] $TargetType = [string])
+        param ($Value, [bool] $AsArray = $false, [type] $TargetType = [System.String])
 
         # stringify reads the alias table of the instance being rendered out of its caller
         # scope, which is ConvertTo-MOFInstance during a real compilation.
@@ -169,10 +169,10 @@ Describe 'Get-MofInstanceText' {
 Describe 'Get-ComplexResourceQualifier' {
     It 'joins the qualifier chain including the current node' {
         $qualifier = Invoke-PSDscInEngineScope {
-            # The engine keeps the enclosing configuration names in a List[string] that
+            # The engine keeps the enclosing configuration names in a List[System.String] that
             # survives between configurations, so fill it in place and empty it again.
             $script:ConfigurationNestingStack.Clear()
-            $script:ConfigurationNestingStack.AddRange([string[]]@('a', 'b', 'c'))
+            $script:ConfigurationNestingStack.AddRange([System.String[]]@('a', 'b', 'c'))
             $qualifier = Get-ComplexResourceQualifier -IncludeCurrent
             $script:ConfigurationNestingStack.Clear()
             $qualifier
@@ -184,7 +184,7 @@ Describe 'Get-ComplexResourceQualifier' {
     It 'joins the qualifier chain excluding the current node' {
         $qualifier = Invoke-PSDscInEngineScope {
             $script:ConfigurationNestingStack.Clear()
-            $script:ConfigurationNestingStack.AddRange([string[]]@('a', 'b', 'c'))
+            $script:ConfigurationNestingStack.AddRange([System.String[]]@('a', 'b', 'c'))
             $qualifier = Get-ComplexResourceQualifier
             $script:ConfigurationNestingStack.Clear()
             $qualifier
@@ -512,7 +512,7 @@ configuration BadOutputCfg
         $null = New-Item -ItemType Directory -Path (Join-Path $moduleRoot 'DscResources\MSFT_LogResource') -Force
         Set-Content -Path (Join-Path $moduleRoot 'LogResModule.psd1') -Value '@{ RootModule = ''LogResModule.psm1''; ModuleVersion = ''1.0'' }'
         Set-Content -Path (Join-Path $moduleRoot 'LogResModule.psm1') -Value ''
-        Set-Content -Path (Join-Path $moduleRoot 'DscResources\MSFT_LogResource\MSFT_LogResource.schema.mof') -Value 'class MSFT_LogResource : OMI_BaseResource { [string] Message; };'
+        Set-Content -Path (Join-Path $moduleRoot 'DscResources\MSFT_LogResource\MSFT_LogResource.schema.mof') -Value 'class MSFT_LogResource : OMI_BaseResource { [System.String] Message; };'
         Import-Module -Name (Join-Path $moduleRoot 'LogResModule.psd1') -Force
 
         try
@@ -708,11 +708,12 @@ Describe 'ValidateNodeResources' {
 Describe 'Coverage: CIM keyword implementation branches' {
     BeforeAll {
         function New-PSDscCimFakeCache {
-            param([string]$Destination)
+            param([System.String]$Destination)
             $module = Get-Module -ListAvailable -Name xTestClassResource | Sort-Object Version -Descending | Select-Object -First 1
             $real = Join-Path $Destination 'real.json'
             Export-DscSchemaCache -Module $module -OutputPath $real | Out-Null
-            $cache = Get-Content -Raw $real | ConvertFrom-Json
+            $lines = [System.Collections.Generic.List[System.String]]::new([System.String[]] [System.IO.File]::ReadAllLines($real))
+            $cache = [PSCustomObject]@{ Lines = $lines; Header = (ConvertFrom-Json -InputObject $lines[0]) }
             function Add-PSDscFakeKeyword($cache, $keyword, $resourceName, $nameMode, $props) {
                 $properties = @{}
                 foreach ($p in $props) {
@@ -726,7 +727,7 @@ Describe 'Coverage: CIM keyword implementation branches' {
                         valueMap       = @($p.valueMap)
                     }
                 }
-                $cache.keywords += [PSCustomObject]@{
+                $entry = [PSCustomObject]@{
                     keyword                   = $keyword
                     resourceName              = $resourceName
                     implementingModule        = $null
@@ -737,6 +738,8 @@ Describe 'Coverage: CIM keyword implementation branches' {
                     metaStatement             = $false
                     properties                = $properties
                 }
+                $cache.Lines.Add((ConvertTo-Json -InputObject $entry -Depth 12 -Compress))
+                Add-Member -InputObject $cache.Header.index -MemberType NoteProperty -Name $keyword -Value ($cache.Lines.Count - 1)
             }
             Add-PSDscFakeKeyword $cache 'FakePlainKeyword' 'FakePlainClass' 'SimpleOptionalName' @(
                 @{ name = 'NoDependsOn'; typeConstraint = 'string'; mandatory = $false; isKey = $false; values = @(); valueMap = @() }
@@ -746,7 +749,9 @@ Describe 'Coverage: CIM keyword implementation branches' {
                 @{ name = 'State'; typeConstraint = 'string'; mandatory = $false; isKey = $false; values = @('On', 'Off'); valueMap = @(@{ key = 'On'; value = 'Enabled' }, @{ key = 'Off'; value = 'Disabled' }) }
             )
             $fake = Join-Path $Destination 'fake.json'
-            $cache | ConvertTo-Json -Depth 12 | Set-Content $fake
+            $cache.Header.keywordCount = $cache.Lines.Count - 2
+            $cache.Lines[0] = ConvertTo-Json -InputObject $cache.Header -Depth 6 -Compress
+            [System.IO.File]::WriteAllLines($fake, $cache.Lines)
             $fake
         }
     }
@@ -1056,13 +1061,13 @@ Describe 'Coverage: CIM keyword implementation via direct invocation' {
     BeforeAll {
         function Invoke-PSDscCimDirect {
             param(
-                [string]$Keyword,
-                [string]$ResourceName,
-                [string]$NameMode,
-                [string]$ImplementingModule,
+                [System.String]$Keyword,
+                [System.String]$ResourceName,
+                [System.String]$NameMode,
+                [System.String]$ImplementingModule,
                 [hashtable]$Props,
                 [hashtable]$Value,
-                [string]$Name = '',
+                [System.String]$Name = '',
                 [hashtable]$Driver
             )
 
@@ -1076,7 +1081,7 @@ Describe 'Coverage: CIM keyword implementation via direct invocation' {
                     $script:NodeResourceIdAliases[$kDriver.node] = [System.Collections.Generic.Dictionary[string,string]]::new([System.StringComparer]::OrdinalIgnoreCase)
                 }
                 $script:ConfigurationNestingStack.Clear()
-                foreach ($e in @($kDriver.nesting)) { $script:ConfigurationNestingStack.Add([string]$e) }
+                foreach ($e in @($kDriver.nesting)) { $script:ConfigurationNestingStack.Add([System.String]$e) }
                 $script:FastHostKeywords = @{}
                 $script:IsMetaConfig = [bool]$kDriver.isMetaConfig
                 if ($kDriver.metaDocProcessed) { $script:PSMetaConfigurationProcessed = $true }
@@ -1093,9 +1098,9 @@ Describe 'Coverage: CIM keyword implementation via direct invocation' {
                     $p.TypeConstraint = $kProps[$pn].type
                     $p.Mandatory = [bool]$kProps[$pn].mandatory
                     $p.IsKey = [bool]$kProps[$pn].isKey
-                    foreach ($v in @($kProps[$pn].values)) { $null = $p.Values.Add([string]$v) }
+                    foreach ($v in @($kProps[$pn].values)) { $null = $p.Values.Add([System.String]$v) }
                     if ($kProps[$pn].valueMap) {
-                        foreach ($vk in $kProps[$pn].valueMap.Keys) { $p.ValueMap[[string]$vk] = [string]$kProps[$pn].valueMap[$vk] }
+                        foreach ($vk in $kProps[$pn].valueMap.Keys) { $p.ValueMap[[System.String]$vk] = [System.String]$kProps[$pn].valueMap[$vk] }
                     }
                     if ($kProps[$pn].range) {
                         $r = $kProps[$pn].range
@@ -1287,8 +1292,8 @@ Describe 'Coverage: psm1 engine internals via direct invocation' {
     BeforeAll {
         function New-ProbeProperty {
             param(
-                [string] $Name,
-                [string] $TypeConstraint = 'string',
+                [System.String] $Name,
+                [System.String] $TypeConstraint = 'string',
                 [bool] $IsKey = $false
             )
             $p = New-Object System.Management.Automation.Language.DynamicKeywordProperty
@@ -1301,7 +1306,7 @@ Describe 'Coverage: psm1 engine internals via direct invocation' {
 
         function New-ProbeKeyword {
             param(
-                [string] $Name,
+                [System.String] $Name,
                 [hashtable] $PropertyTypes
             )
             $k = New-Object System.Management.Automation.Language.DynamicKeyword
@@ -1320,7 +1325,7 @@ Describe 'Coverage: psm1 engine internals via direct invocation' {
             param([hashtable] $Entries)
             $d = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::OrdinalIgnoreCase)
             foreach ($key in $Entries.Keys) {
-                $d[$key] = [string]$Entries[$key]
+                $d[$key] = [System.String]$Entries[$key]
             }
             $d
         }
@@ -1458,9 +1463,9 @@ Describe 'Coverage: psm1 engine internals via direct invocation' {
                 Invoke-PSDscInEngineScope {
                     Initialize-ConfigurationRuntimeState
                     $dict = New-Object 'System.Collections.Generic.Dictionary[string,string[]]' ([System.StringComparer]::OrdinalIgnoreCase)
-                    $dict['r1'] = [string[]]@('foo')
-                    $dict['barfoo'] = [string[]]@()
-                    $dict['r2'] = [string[]]@('zork')
+                    $dict['r1'] = [System.String[]]@('foo')
+                    $dict['barfoo'] = [System.String[]]@()
+                    $dict['r2'] = [System.String[]]@('zork')
                     $script:NoNameNodesResources = $dict
                     ValidateNoNameNodeResources
                     $script:NoNameNodesResources = $null
@@ -1480,9 +1485,9 @@ Describe 'Coverage: psm1 engine internals via direct invocation' {
                     for ($i = 0; $i -lt 1026; $i++) {
                         if ($i -lt 1025) {
                             $dep = "r$($i + 1)"
-                            $chain["r$i"] = [string[]]@($dep)
+                            $chain["r$i"] = [System.String[]]@($dep)
                         } else {
-                            $chain["r$i"] = [string[]]@()
+                            $chain["r$i"] = [System.String[]]@()
                         }
                     }
                     $script:NodeResources = $chain

@@ -21,23 +21,23 @@ $__fhBody = $args[$args.Count - 1]
 $__fhName = ''
 if ($__fhKeyword.NameMode -eq [System.Management.Automation.Language.DynamicKeywordNameMode]::NameRequired)
 {
-    if ($args.Count -lt 2 -or $args[0] -isnot [string])
+    if ($args.Count -lt 2 -or $args[0] -isnot [System.String])
     {
         throw "Resource '$__fhKeywordName': expected '$__fhKeywordName <instance name> { ... }'."
     }
     $__fhName = $args[0]
 }
-elseif ($args.Count -ge 2 -and $args[0] -is [string])
+elseif ($args.Count -ge 2 -and $args[0] -is [System.String])
 {
     $__fhName = $args[0]
 }
 if ($__fhBody -isnot [hashtable])
 {
-    throw "Resource '$__fhKeywordName': the property block reached the adapter as $($__fhBody.GetType().Name) instead of a hashtable. Convert-FastHostBodyToHashtable did not rewrite it."
+    throw "Resource '$__fhKeywordName': the property block reached the adapter as $($__fhBody.GetType().Name) instead of a hashtable. ConvertTo-FastHostCompileText did not rewrite it."
 }
 $__fhValue = $__fhBody
 $__fhFile = $MyInvocation.ScriptName
-if ([string]::IsNullOrEmpty($__fhFile))
+if ([System.String]::IsNullOrEmpty($__fhFile))
 {
     # The body runs from a scriptblock built out of the stripped text, so it carries no
     # file. Use the path the compile was started from, to keep SourceInfo identical to
@@ -50,32 +50,78 @@ $__fhSource = "$__fhFile::$($MyInvocation.ScriptLineNumber)::$($MyInvocation.Off
 
 function Get-FastHostScriptPath
 {
-    [OutputType([string])]
+    [OutputType([System.String])]
     param()
 
     $script:FastHostScriptPath
 }
 
+# The cache stays as text lines until a compile asks for a keyword.
 function Get-FastHostKeyword
 {
     param (
         [Parameter(Mandatory)]
-        [string]
+        [System.String]
         $Name
     )
 
     if ($script:FastHostKeywords)
     {
-        $script:FastHostKeywords[$Name]
+        $keyword = $script:FastHostKeywords[$Name]
+        if ($null -ne $keyword)
+        {
+            return $keyword
+        }
     }
+
+    if ($script:FastHostKeywordSource)
+    {
+        foreach ($cache in $script:FastHostKeywordSource)
+        {
+            $keyword = Get-DscSchemaCacheKeyword -Cache $cache -Name $Name
+            if ($null -ne $keyword)
+            {
+                $script:FastHostKeywords[$keyword.Keyword] = $keyword
+                return $keyword
+            }
+        }
+    }
+
+    $null
+}
+
+function Get-FastHostKeywordName
+{
+    [OutputType([System.Collections.Generic.HashSet[System.String]])]
+    param()
+
+    $names = New-Object -TypeName 'System.Collections.Generic.HashSet[System.String]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+    if ($script:FastHostKeywords)
+    {
+        foreach ($key in $script:FastHostKeywords.Keys)
+        {
+            $null = $names.Add($key)
+        }
+    }
+    if ($script:FastHostKeywordSource)
+    {
+        foreach ($cache in $script:FastHostKeywordSource)
+        {
+            foreach ($name in (Get-DscSchemaCacheKeywordName -Cache $cache))
+            {
+                $null = $names.Add($name)
+            }
+        }
+    }
+    , $names
 }
 
 function Get-FastHostBodyScriptBlock
 {
-    [OutputType([scriptblock])]
+    [OutputType([ScriptBlock])]
     param (
         [Parameter(Mandatory)]
-        [scriptblock]
+        [ScriptBlock]
         $Body
     )
 
@@ -84,13 +130,13 @@ function Get-FastHostBodyScriptBlock
     if ($null -eq $cached)
     {
         $inner = $text.Substring(1, $text.Length - 2)
-        $cached = [scriptblock]::Create('@{' + $inner + '}')
+        $cached = [ScriptBlock]::Create('@{' + $inner + '}')
         $script:FastHostBodyCache[$text] = $cached
     }
     $cached
 }
 
-function Register-DscCachedKeywords
+function Register-DscSchemaCache
 {
     param (
         [Parameter(Mandatory)]
@@ -105,16 +151,20 @@ function Register-DscCachedKeywords
     {
         $script:FastHostAdapters = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,scriptblock]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
     }
-    $adapter = [scriptblock]::Create($script:FastHostAdapterText)
-
-    foreach ($schemaObject in $Cache.keywords)
+    if ($null -eq $script:FastHostKeywordSource)
     {
-        $keyword = ConvertFrom-DscKeywordSchemaObject -SchemaObject $schemaObject
-        $script:FastHostKeywords[$keyword.Keyword] = $keyword
-        $script:FastHostAdapters[$keyword.Keyword] = $adapter
-        if ($keyword.ImplementingModule)
+        $script:FastHostKeywordSource = New-Object -TypeName 'System.Collections.Generic.List[System.Object]'
+    }
+    $script:FastHostKeywordSource.Add($Cache)
+
+    $adapter = [ScriptBlock]::Create($script:FastHostAdapterText)
+    $moduleName = [System.String]$Cache.module.name
+    foreach ($name in (Get-DscSchemaCacheKeywordName -Cache $Cache))
+    {
+        $script:FastHostAdapters[$name] = $adapter
+        if ($moduleName)
         {
-            $script:FastHostAdapters["$($keyword.ImplementingModule)\$($keyword.Keyword)"] = $adapter
+            $script:FastHostAdapters["$moduleName\$name"] = $adapter
         }
     }
 }
@@ -163,7 +213,7 @@ function Get-FastHostMergeCandidateKeyword
     $elements = $command.CommandElements
     if ($elements.Count -le 2)
     {
-        return [pscustomobject]@{
+        return [PSCustomObject]@{
             Name      = $command.GetCommandName()
             EndOffset = $command.Extent.EndOffset
         }
@@ -178,7 +228,7 @@ function Get-FastHostMergeCandidateKeyword
             return $null
         }
 
-        return [pscustomobject]@{
+        return [PSCustomObject]@{
             Name      = $keywordElement.Value
             EndOffset = $command.Extent.EndOffset
         }
@@ -187,70 +237,9 @@ function Get-FastHostMergeCandidateKeyword
     return $null
 }
 
-# Joins 'KeywordName [InstanceName] <newline> { ... }' into one statement. With the
-# keyword unknown to the parser, a next-line brace parses as a separate scriptblock
-# statement and the engine rejects the resource as undefined.
-function Merge-FastHostResourceStatements
-{
-    [OutputType([string])]
-    param (
-        [Parameter(Mandatory)]
-        [string]
-        $Text,
-
-        [Parameter(Mandatory)]
-        $KeywordNames
-    )
-
-    $masked = [regex]::Replace($Text, '(?i)\bConfiguration\b', 'C0nfiguration')
-    $tokens = $null
-    $parseErrors = $null
-    $ast = [System.Management.Automation.Language.Parser]::ParseInput($masked, [ref]$tokens, [ref]$parseErrors)
-
-    $splices = New-Object -TypeName 'System.Collections.Generic.List[object]'
-    $blocks = $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.StatementBlockAst] -or $args[0] -is [System.Management.Automation.Language.NamedBlockAst] }, $true)
-    foreach ($block in $blocks)
-    {
-        $statements = $block.Statements
-        for ($i = 0; $i -lt $statements.Count - 1; $i++)
-        {
-            $first = $statements[$i]
-            $candidate = Get-FastHostMergeCandidateKeyword -Statement $first
-            if ($null -eq $candidate -or -not $candidate.Name -or -not $KeywordNames.Contains($candidate.Name))
-            {
-                continue
-            }
-            $second = $statements[$i + 1]
-            if ($second -isnot [System.Management.Automation.Language.PipelineAst] -or $second.PipelineElements.Count -ne 1)
-            {
-                continue
-            }
-            $expression = $second.PipelineElements[0] -as [System.Management.Automation.Language.CommandExpressionAst]
-            if ($null -eq $expression -or
-                ($expression.Expression -isnot [System.Management.Automation.Language.ScriptBlockExpressionAst] -and
-                 $expression.Expression -isnot [System.Management.Automation.Language.HashtableAst]))
-            {
-                continue
-            }
-            $gapStart = $candidate.EndOffset
-            $gapLength = $second.Extent.StartOffset - $gapStart
-            if ($gapLength -gt 0)
-            {
-                $splices.Add([pscustomobject]@{ Start = $gapStart; Length = $gapLength })
-            }
-        }
-    }
-
-    foreach ($splice in ($splices | Sort-Object -Property Start -Descending))
-    {
-        $Text = $Text.Remove($splice.Start, $splice.Length).Insert($splice.Start, ' ')
-    }
-    $Text
-}
-
 function Get-FastHostBodyKeywordName
 {
-    [OutputType([string])]
+    [OutputType([System.String])]
     param (
         [Parameter(Mandatory)]
         [System.Management.Automation.Language.CommandAst]
@@ -272,62 +261,226 @@ function Get-FastHostBodyKeywordName
     return $Command.GetCommandName()
 }
 
-function Convert-FastHostBodyToHashtable
+# A parsed configuration statement imports its resource modules. Masking the word keeps the
+# parser away from that, and the same-length replacement keeps every extent offset valid for
+# the original text.
+function Get-FastHostMaskedAst
 {
-    [OutputType([string])]
+    [OutputType([System.Management.Automation.Language.ScriptBlockAst])]
     param (
         [Parameter(Mandatory)]
-        [string]
-        $Text,
-
-        [Parameter(Mandatory)]
-        $KeywordNames
-    )
-
-    $masked = [regex]::Replace($Text, '(?i)\bConfiguration\b', 'C0nfiguration')
-    $ast = [System.Management.Automation.Language.Parser]::ParseInput($masked, [ref]$null, [ref]$null)
-
-    $offsets = New-Object -TypeName 'System.Collections.Generic.List[int]'
-    $commands = $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.CommandAst] }, $true)
-    foreach ($command in $commands)
-    {
-        $elements = $command.CommandElements
-        $body = $elements[$elements.Count - 1] -as [System.Management.Automation.Language.ScriptBlockExpressionAst]
-        if ($null -eq $body)
-        {
-            continue
-        }
-
-        $name = Get-FastHostBodyKeywordName -Command $command
-        if (-not $name -or -not $KeywordNames.Contains($name))
-        {
-            continue
-        }
-
-        $offsets.Add($body.Extent.StartOffset)
-    }
-
-    foreach ($offset in ($offsets | Sort-Object -Descending))
-    {
-        # 'MSFT_Type @{' parses, 'MSFT_Type@{' does not
-        # Keep a separator when the source had none
-        $prefix = if ($offset -gt 0 -and -not [char]::IsWhiteSpace($Text[$offset - 1])) { ' @' } else { '@' }
-        $Text = $Text.Insert($offset, $prefix)
-    }
-    $Text
-}
-function Get-StrippedConfigurationText
-{
-    param (
-        [Parameter(Mandatory)]
-        [string]
+        [System.String]
         $Text
     )
 
     $masked = [regex]::Replace($Text, '(?i)\bConfiguration\b', 'C0nfiguration')
     $tokens = $null
     $parseErrors = $null
-    $ast = [System.Management.Automation.Language.Parser]::ParseInput($masked, [ref]$tokens, [ref]$parseErrors)
+    [System.Management.Automation.Language.Parser]::ParseInput($masked, [ref]$tokens, [ref]$parseErrors)
+}
+
+function Invoke-FastHostTextEdit
+{
+    [OutputType([System.String])]
+    param (
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [System.String]
+        $Text,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        $Edit
+    )
+
+    if ($Edit.Count -eq 0)
+    {
+        return $Text
+    }
+
+    $ordered = @($Edit | Sort-Object -Property Start, Length)
+    $builder = New-Object -TypeName System.Text.StringBuilder -ArgumentList ($Text.Length + $ordered.Count * 2)
+    $position = 0
+    foreach ($item in $ordered)
+    {
+        if ($item.Start -lt $position)
+        {
+            throw "Overlapping text edits at offset $($item.Start)."
+        }
+        $null = $builder.Append($Text.Substring($position, $item.Start - $position))
+        $null = $builder.Append($item.Text)
+        $position = $item.Start + $item.Length
+    }
+    $null = $builder.Append($Text.Substring($position))
+    $builder.ToString()
+}
+
+function ConvertTo-FastHostCompileText
+{
+    [OutputType([System.String])]
+    param (
+        [Parameter(Mandatory)]
+        [System.String]
+        $Text,
+
+        [System.Management.Automation.Language.ScriptBlockAst]
+        $Ast,
+
+        [AllowEmptyCollection()]
+        $ImportStatement = @(),
+
+        [AllowEmptyCollection()]
+        $KeywordNames = @(),
+
+        [switch]
+        $Merge,
+
+        [switch]
+        $Convert
+    )
+
+    if ($null -eq $Ast)
+    {
+        $Ast = Get-FastHostMaskedAst -Text $Text
+    }
+
+    $names = $KeywordNames -as [System.Collections.Generic.HashSet[System.String]]
+    if ($null -eq $names)
+    {
+        $names = New-Object -TypeName 'System.Collections.Generic.HashSet[System.String]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($name in @($KeywordNames)) { $null = $names.Add([System.String]$name) }
+    }
+
+    $edits = New-Object -TypeName 'System.Collections.Generic.List[System.Object]'
+    foreach ($statement in @($ImportStatement))
+    {
+        $edits.Add([PSCustomObject]@{ Start = $statement.Extent.StartOffset; Length = $statement.Extent.EndOffset - $statement.Extent.StartOffset; Text = '' })
+    }
+
+    if ($names.Count -eq 0 -or -not ($Merge -or $Convert))
+    {
+        return Invoke-FastHostTextEdit -Text $Text -Edit $edits
+    }
+
+    $bodyStarts = New-Object -TypeName 'System.Collections.Generic.HashSet[int]'
+
+    # With the keyword unknown to the parser, a next-line brace parses as a separate scriptblock
+    # statement and the engine rejects the resource as undefined.
+    if ($Merge)
+    {
+        $blocks = $Ast.FindAll({ $args[0] -is [System.Management.Automation.Language.StatementBlockAst] -or $args[0] -is [System.Management.Automation.Language.NamedBlockAst] }, $true)
+        foreach ($block in $blocks)
+        {
+            $statements = $block.Statements
+            for ($i = 0; $i -lt $statements.Count - 1; $i++)
+            {
+                $candidate = Get-FastHostMergeCandidateKeyword -Statement $statements[$i]
+                if ($null -eq $candidate -or -not $candidate.Name -or -not $names.Contains($candidate.Name))
+                {
+                    continue
+                }
+                $second = $statements[$i + 1]
+                if ($second -isnot [System.Management.Automation.Language.PipelineAst] -or $second.PipelineElements.Count -ne 1)
+                {
+                    continue
+                }
+                $expression = $second.PipelineElements[0] -as [System.Management.Automation.Language.CommandExpressionAst]
+                if ($null -eq $expression -or
+                    ($expression.Expression -isnot [System.Management.Automation.Language.ScriptBlockExpressionAst] -and
+                     $expression.Expression -isnot [System.Management.Automation.Language.HashtableAst]))
+                {
+                    continue
+                }
+                $gapStart = $candidate.EndOffset
+                $gapLength = $second.Extent.StartOffset - $gapStart
+                if ($gapLength -gt 0)
+                {
+                    $edits.Add([PSCustomObject]@{ Start = $gapStart; Length = $gapLength; Text = ' ' })
+                }
+                if ($Convert -and $expression.Expression -is [System.Management.Automation.Language.ScriptBlockExpressionAst])
+                {
+                    $offset = $second.Extent.StartOffset
+                    if ($bodyStarts.Add($offset))
+                    {
+                        $prefix = if ($gapLength -gt 0 -or ($offset -gt 0 -and [char]::IsWhiteSpace($Text[$offset - 1]))) { '@' } else { ' @' }
+                        $edits.Add([PSCustomObject]@{ Start = $offset; Length = 0; Text = $prefix })
+                    }
+                }
+            }
+        }
+    }
+
+    if ($Convert)
+    {
+        $commands = $Ast.FindAll({ $args[0] -is [System.Management.Automation.Language.CommandAst] }, $true)
+        foreach ($command in $commands)
+        {
+            $elements = $command.CommandElements
+            $body = $elements[$elements.Count - 1] -as [System.Management.Automation.Language.ScriptBlockExpressionAst]
+            if ($null -eq $body)
+            {
+                continue
+            }
+
+            $name = Get-FastHostBodyKeywordName -Command $command
+            if (-not $name -or -not $names.Contains($name))
+            {
+                continue
+            }
+
+            $offset = $body.Extent.StartOffset
+            if ($bodyStarts.Add($offset))
+            {
+                # 'MSFT_Type @{' parses, 'MSFT_Type@{' does not
+                # Keep a separator when the source had none
+                $prefix = if ($offset -gt 0 -and -not [char]::IsWhiteSpace($Text[$offset - 1])) { ' @' } else { '@' }
+                $edits.Add([PSCustomObject]@{ Start = $offset; Length = 0; Text = $prefix })
+            }
+        }
+    }
+
+    Invoke-FastHostTextEdit -Text $Text -Edit $edits
+}
+
+function Merge-FastHostResourceStatements
+{
+    [OutputType([System.String])]
+    param (
+        [Parameter(Mandatory)]
+        [System.String]
+        $Text,
+
+        [Parameter(Mandatory)]
+        $KeywordNames
+    )
+
+    ConvertTo-FastHostCompileText -Text $Text -KeywordNames $KeywordNames -Merge
+}
+
+function Convert-FastHostBodyToHashtable
+{
+    [OutputType([System.String])]
+    param (
+        [Parameter(Mandatory)]
+        [System.String]
+        $Text,
+
+        [Parameter(Mandatory)]
+        $KeywordNames
+    )
+
+    ConvertTo-FastHostCompileText -Text $Text -KeywordNames $KeywordNames -Convert
+}
+
+function Get-StrippedConfigurationText
+{
+    param (
+        [Parameter(Mandatory)]
+        [System.String]
+        $Text
+    )
+
+    $ast = Get-FastHostMaskedAst -Text $Text
 
     $configurationNames = @()
     $importStatements = @()
@@ -429,6 +582,8 @@ function Get-StrippedConfigurationText
                 Text               = $null
                 ModuleSpecs        = @()
                 ConfigurationNames = @()
+                Ast                = $null
+                ImportStatements   = @()
             }
         }
 
@@ -440,6 +595,8 @@ function Get-StrippedConfigurationText
                 Text               = $null
                 ModuleSpecs        = @()
                 ConfigurationNames = @()
+                Ast                = $null
+                ImportStatements   = @()
             }
         }
 
@@ -453,46 +610,142 @@ function Get-StrippedConfigurationText
         }
     }
 
-    $stripped = $Text
-    foreach ($statement in ($importStatements | Sort-Object -Property { $_.Extent.StartOffset } -Descending))
-    {
-        $stripped = $stripped.Remove($statement.Extent.StartOffset, $statement.Extent.EndOffset - $statement.Extent.StartOffset)
-    }
-
     [PSCustomObject]@{
         Supported          = $true
         Reason             = $null
-        Text               = $stripped
+        Text               = ConvertTo-FastHostCompileText -Text $Text -Ast $ast -ImportStatement $importStatements
         ModuleSpecs        = $moduleSpecs
         ConfigurationNames = $configurationNames
+        Ast                = $ast
+        ImportStatements   = $importStatements
     }
 }
+
+# Get-Module -ListAvailable analyzes every nested module of a manifest and costs seconds for
+# a large resource module. A manifest scan is enough for the cache lookup.
+function Resolve-FastHostModule
+{
+    [OutputType([System.Object])]
+    param (
+        [Parameter(Mandatory)]
+        [System.String]
+        $ModuleName,
+
+        [version]
+        $ModuleVersion
+    )
+
+    $candidates = New-Object -TypeName 'System.Collections.Generic.List[System.Object]'
+    foreach ($entry in ($env:PSModulePath -split [System.IO.Path]::PathSeparator))
+    {
+        if ([System.String]::IsNullOrWhiteSpace($entry))
+        {
+            continue
+        }
+        $moduleFolder = Join-Path -Path $entry -ChildPath $ModuleName
+        if (-not [System.IO.Directory]::Exists($moduleFolder))
+        {
+            continue
+        }
+        $flat = Join-Path -Path $moduleFolder -ChildPath "$ModuleName.psd1"
+        if ([System.IO.File]::Exists($flat))
+        {
+            $candidates.Add([PSCustomObject]@{ Path = $flat; FolderVersion = $null })
+        }
+        foreach ($versionFolder in [System.IO.Directory]::EnumerateDirectories($moduleFolder))
+        {
+            $manifest = Join-Path -Path $versionFolder -ChildPath "$ModuleName.psd1"
+            if (-not [System.IO.File]::Exists($manifest))
+            {
+                continue
+            }
+            $folderVersion = $null
+            $null = [version]::TryParse((Split-Path $versionFolder -Leaf), [ref]$folderVersion)
+            $candidates.Add([PSCustomObject]@{ Path = $manifest; FolderVersion = $folderVersion })
+        }
+    }
+
+    $best = $null
+    foreach ($candidate in $candidates)
+    {
+        if ($ModuleVersion -and $candidate.FolderVersion -and $candidate.FolderVersion -ne $ModuleVersion)
+        {
+            continue
+        }
+        try
+        {
+            $data = Import-PowerShellDataFile -Path $candidate.Path -ErrorAction Stop
+        }
+        catch
+        {
+            continue
+        }
+        $version = $null
+        if (-not [version]::TryParse([System.String]$data.ModuleVersion, [ref]$version))
+        {
+            continue
+        }
+        if ($ModuleVersion -and $version -ne $ModuleVersion)
+        {
+            continue
+        }
+        if ($null -eq $best -or $version -gt $best.Version)
+        {
+            $best = [PSCustomObject]@{
+                Name       = $ModuleName
+                Version    = $version
+                ModuleBase = Split-Path $candidate.Path -Parent
+                Path       = $candidate.Path
+            }
+        }
+    }
+
+    $best
+}
+
+function Get-DscFastCompileTiming
+{
+    [OutputType([System.Collections.Specialized.OrderedDictionary])]
+    param()
+
+    if ($null -eq $script:FastHostTiming)
+    {
+        return $null
+    }
+    $copy = [ordered]@{}
+    foreach ($entry in $script:FastHostTiming.GetEnumerator())
+    {
+        $copy[$entry.Key] = $entry.Value
+    }
+    $copy
+}
+Export-ModuleMember -Function Get-DscFastCompileTiming
 
 function Invoke-DscFastCompile
 {
     [CmdletBinding(DefaultParameterSetName = 'Path')]
     param (
         [Parameter(Mandatory, ParameterSetName = 'Path', Position = 0)]
-        [string]
+        [System.String]
         $Path,
 
         [Parameter(Mandatory, ParameterSetName = 'Text')]
-        [string]
+        [System.String]
         $ScriptText,
 
-        [string]
+        [System.String]
         $ConfigurationName,
 
-        [hashtable]
+        [System.Collections.Hashtable]
         $Parameters,
 
-        [object]
+        [System.Object]
         $ConfigurationData,
 
-        [string]
+        [System.String]
         $OutputPath,
 
-        [string[]]
+        [System.String[]]
         $SchemaCachePath,
 
         [switch]
@@ -511,6 +764,11 @@ function Invoke-DscFastCompile
         $ScriptText = [System.IO.File]::ReadAllText($Path)
     }
 
+    $timing = [ordered]@{}
+    $script:FastHostTiming = $timing
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $total = [System.Diagnostics.Stopwatch]::StartNew()
+
     Assert-DscConfigurationShim
 
     $fallbackReason = $null
@@ -519,6 +777,8 @@ function Invoke-DscFastCompile
     {
         $fallbackReason = $stripResult.Reason
     }
+    $timing['parse'] = $stopwatch.ElapsedMilliseconds
+    $stopwatch.Restart()
 
     $resolvedModules = @()
     if (-not $fallbackReason)
@@ -529,12 +789,7 @@ function Invoke-DscFastCompile
             $module = $script:FastHostResolvedModules[$specKey]
             if ($null -eq $module)
             {
-                $candidates = Get-Module -ListAvailable -Name $spec.ModuleName | Sort-Object -Property Version -Descending
-                if ($spec.ModuleVersion)
-                {
-                    $candidates = $candidates | Where-Object { $_.Version -eq $spec.ModuleVersion }
-                }
-                $module = $candidates | Select-Object -First 1
+                $module = Resolve-FastHostModule -ModuleName $spec.ModuleName -ModuleVersion $spec.ModuleVersion
                 if ($null -ne $module)
                 {
                     $script:FastHostResolvedModules[$specKey] = $module
@@ -549,17 +804,18 @@ function Invoke-DscFastCompile
             $dscResourcesPath = Join-Path $module.ModuleBase 'DscResources'
             if (Test-Path $dscResourcesPath)
             {
-                $schemaFiles = @([System.IO.Directory]::EnumerateFiles($dscResourcesPath, '*.schema.mof', [System.IO.SearchOption]::AllDirectories)) +
-                    @([System.IO.Directory]::EnumerateFiles($dscResourcesPath, '*.schema.psm1', [System.IO.SearchOption]::AllDirectories))
-                if ($schemaFiles.Count -gt 0)
+                $compositeFiles = @([System.IO.Directory]::EnumerateFiles($dscResourcesPath, '*.schema.psm1', [System.IO.SearchOption]::AllDirectories))
+                if ($compositeFiles.Count -gt 0)
                 {
-                    $fallbackReason = "Module '$($module.Name)' contains script-based or composite resources, which the fast host does not support yet."
+                    $fallbackReason = "Module '$($module.Name)' contains composite resources, which the fast host does not support yet."
                     break
                 }
             }
             $resolvedModules += $module
         }
     }
+    $timing['resolve'] = $stopwatch.ElapsedMilliseconds
+    $stopwatch.Restart()
 
     if ($fallbackReason)
     {
@@ -574,11 +830,15 @@ function Invoke-DscFastCompile
     foreach ($module in $resolvedModules)
     {
         $registered = $script:FastHostRegisteredModules[$module.Name]
-        if ($registered -and $registered -eq $module.Version.ToString())
+        if ($registered -and $registered -eq $module.Version.ToString() -and -not $Force)
         {
             continue
         }
-        $cache = Get-DscSchemaCache -Module $module -SchemaCachePath $SchemaCachePath
+        $cache = $null
+        if (-not $Force)
+        {
+            $cache = Get-DscSchemaCache -Module $module -SchemaCachePath $SchemaCachePath
+        }
         if (-not $cache)
         {
             $cache = New-DscSchemaCacheForModule -Module $module
@@ -592,16 +852,16 @@ function Invoke-DscFastCompile
             Write-Warning -Message "Falling back to standard compilation: no usable schema cache for module '$($module.Name)' $($module.Version)."
             return Invoke-DscFastCompileBody -Text $ScriptText -ConfigurationName $ConfigurationName -Parameters $Parameters -ConfigurationData $ConfigurationData -OutputPath $OutputPath -ScriptPath $Path -ConfigurationNames $stripResult.ConfigurationNames
         }
-        Register-DscCachedKeywords -Cache $cache
+        Register-DscSchemaCache -Cache $cache
         $script:FastHostRegisteredModules[$module.Name] = $module.Version.ToString()
     }
+    $timing['cache'] = $stopwatch.ElapsedMilliseconds
+    $stopwatch.Restart()
 
-    $compileText = $stripResult.Text
-    if ($script:FastHostKeywords -and $script:FastHostKeywords.Count -gt 0)
-    {
-        $compileText = Merge-FastHostResourceStatements -Text $compileText -KeywordNames $script:FastHostKeywords.Keys
-        $compileText = Convert-FastHostBodyToHashtable -Text $compileText -KeywordNames $script:FastHostKeywords.Keys
-    }
+    $keywordNames = Get-FastHostKeywordName
+    $compileText = ConvertTo-FastHostCompileText -Text $ScriptText -Ast $stripResult.Ast -ImportStatement $stripResult.ImportStatements -KeywordNames $keywordNames -Merge -Convert
+    $timing['rewrite'] = $stopwatch.ElapsedMilliseconds
+    $stopwatch.Restart()
 
     $script:FastHostActive = $true
     $script:FastHostValidateMof = [bool]$ValidateMof
@@ -616,6 +876,8 @@ function Invoke-DscFastCompile
         $script:FastHostValidateMof = $false
         $Global:PSDscFastCompileActive = $false
         [System.Management.Automation.Language.DynamicKeyword]::Reset()
+        $timing['compile'] = $stopwatch.ElapsedMilliseconds
+        $timing['total'] = $total.ElapsedMilliseconds
     }
 }
 Export-ModuleMember -Function Invoke-DscFastCompile
@@ -624,33 +886,29 @@ function Invoke-DscFastCompileBody
 {
     param (
         [Parameter(Mandatory)]
-        [string]
+        [System.String]
         $Text,
 
-        [string]
+        [System.String]
         $ConfigurationName,
 
-        [hashtable]
+        [System.Collections.Hashtable]
         $Parameters,
 
-        [object]
+        [System.Object]
         $ConfigurationData,
 
-        [string]
+        [System.String]
         $OutputPath,
 
-        [string]
+        [System.String]
         $ScriptPath,
 
-        [string[]]
+        [System.String[]]
         $ConfigurationNames
     )
 
-    $scriptBlock = [scriptblock]::Create($Text)
-
-    # A scriptblock built from text has no file, so the adapter cannot read the source
-    # path off $MyInvocation. Hand it the real one to keep SourceInfo aligned with the
-    # standard path.
+    $scriptBlock = [ScriptBlock]::Create($Text)
     $script:FastHostScriptPath = $ScriptPath
 
     # Parsing the configuration statement makes the engine load the inbox module by
