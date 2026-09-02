@@ -1,22 +1,22 @@
-# Persistent DSC schema cache: serializes DynamicKeyword definitions of a module
-# to JSON so the fast host can register them without any module parsing.
+# Line based cache. Line 1 holds the header with the keyword index, line 2 the source file
+# list, every later line one keyword.
 
-$script:SchemaCacheFormatVersion = 1
+$script:SchemaCacheFormatVersion = 2
 
 function Get-DscSchemaCacheUserPath
 {
-    [OutputType([string])]
+    [OutputType([System.String])]
     param (
         [Parameter(Mandatory)]
-        [string]
+        [System.String]
         $ModuleName,
 
         [Parameter(Mandatory)]
-        [version]
+        [System.Version]
         $ModuleVersion,
 
         [Parameter(Mandatory)]
-        [string]
+        [System.String]
         $Fingerprint
     )
 
@@ -83,7 +83,7 @@ function ConvertFrom-DscKeywordSchemaObject
     $keyword.ImplementingModule = $SchemaObject.implementingModule
     if ($SchemaObject.implementingModuleVersion)
     {
-        $keyword.ImplementingModuleVersion = [version]$SchemaObject.implementingModuleVersion
+        $keyword.ImplementingModuleVersion = [System.Version]$SchemaObject.implementingModuleVersion
     }
     $keyword.NameMode = [System.Management.Automation.Language.DynamicKeywordNameMode]$SchemaObject.nameMode
     $keyword.BodyMode = [System.Management.Automation.Language.DynamicKeywordBodyMode]$SchemaObject.bodyMode
@@ -104,7 +104,7 @@ function ConvertFrom-DscKeywordSchemaObject
         {
             if ($null -ne $mapEntry)
             {
-                $property.ValueMap[[string]$mapEntry.key] = $mapEntry.value
+                $property.ValueMap[[System.String]$mapEntry.key] = $mapEntry.value
             }
         }
         $keyword.Properties.Add($item.Name, $property)
@@ -113,23 +113,151 @@ function ConvertFrom-DscKeywordSchemaObject
     $keyword
 }
 
+function Get-DscModuleSourceEntry
+{
+    [OutputType([System.Object[]])]
+    param (
+        [Parameter(Mandatory)]
+        [System.String]
+        $ModuleBase
+    )
+
+    $entries = New-Object -TypeName 'System.Collections.Generic.List[System.Object]'
+    foreach ($pattern in '*.psm1', '*.psd1', '*.mof')
+    {
+        foreach ($file in [System.IO.Directory]::EnumerateFiles($ModuleBase, $pattern, [System.IO.SearchOption]::AllDirectories))
+        {
+            $entries.Add([PSCustomObject]@{
+                    Path   = $file.Substring($ModuleBase.Length).TrimStart('\', '/')
+                    Length = [System.IO.FileInfo]::new($file).Length
+                })
+        }
+    }
+    @($entries | Sort-Object -Property Path)
+}
+
+function ConvertTo-DscSourceFingerprint
+{
+    [OutputType([System.String])]
+    param (
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [System.Object[]]
+        $Entry
+    )
+
+    $total = [long]0
+    $builder = New-Object -TypeName System.Text.StringBuilder
+    foreach ($item in $Entry)
+    {
+        $total += [long]$item.Length
+        $null = $builder.Append($item.Path.ToLowerInvariant()).Append('|').Append([System.String]$item.Length).Append("`n")
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try
+    {
+        $hash = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($builder.ToString()))
+    }
+    finally
+    {
+        $sha.Dispose()
+    }
+    $hex = [System.BitConverter]::ToString($hash, 0, 8).Replace('-', '').ToLowerInvariant()
+    '{0}:{1}:{2}' -f $Entry.Count, $total, $hex
+}
+
+function Read-DscSchemaCacheFile
+{
+    param (
+        [Parameter(Mandatory)]
+        [System.String]
+        $Path
+    )
+
+    $lines = [System.IO.File]::ReadAllLines($Path)
+    if ($lines.Count -eq 0)
+    {
+        throw "Schema cache '$Path' is empty."
+    }
+    $header = ConvertFrom-Json -InputObject $lines[0]
+    if ($null -eq $header.formatVersion -or $null -eq $header.module)
+    {
+        throw "Schema cache '$Path' has no header."
+    }
+    if ($header.formatVersion -eq $script:SchemaCacheFormatVersion -and $lines.Count -lt 2)
+    {
+        throw "Schema cache '$Path' is truncated."
+    }
+    [PSCustomObject]@{
+        Path          = $Path
+        formatVersion = $header.formatVersion
+        generator     = $header.generator
+        module        = $header.module
+        index         = $header.index
+        keywordCount  = $header.keywordCount
+        resourceCount = $header.resourceCount
+        Lines         = $lines
+    }
+}
+
+function Get-DscSchemaCacheSourceList
+{
+    param (
+        [Parameter(Mandatory)]
+        $Cache
+    )
+
+    ConvertFrom-Json -InputObject $Cache.Lines[1]
+}
+
+function Get-DscSchemaCacheKeyword
+{
+    [OutputType([System.Management.Automation.Language.DynamicKeyword])]
+    param (
+        [Parameter(Mandatory)]
+        $Cache,
+
+        [Parameter(Mandatory)]
+        [System.String]
+        $Name
+    )
+
+    $entry = $Cache.index.PSObject.Properties[$Name]
+    if ($null -eq $entry)
+    {
+        return $null
+    }
+    ConvertFrom-DscKeywordSchemaObject -SchemaObject (ConvertFrom-Json -InputObject $Cache.Lines[[int]$entry.Value])
+}
+
+function Get-DscSchemaCacheKeywordName
+{
+    [OutputType([string[]])]
+    param (
+        [Parameter(Mandatory)]
+        $Cache
+    )
+
+    @($Cache.index.PSObject.Properties | ForEach-Object { $_.Name })
+}
+
 function Export-DscSchemaCache
 {
     [CmdletBinding()]
     param (
         [Parameter(Mandatory, ParameterSetName = 'ByName', Position = 0)]
-        [string]
+        [System.String]
         $ModuleName,
 
         [Parameter(ParameterSetName = 'ByName')]
-        [version]
+        [System.Version]
         $RequiredVersion,
 
         [Parameter(Mandatory, ParameterSetName = 'ByModuleInfo')]
         [System.Management.Automation.PSModuleInfo]
         $Module,
 
-        [string]
+        [System.String]
         $OutputPath
     )
 
@@ -138,7 +266,7 @@ function Export-DscSchemaCache
         $candidates = Get-Module -ListAvailable -Name $ModuleName | Sort-Object -Property Version -Descending
         if ($RequiredVersion)
         {
-            $candidates = $candidates | Where-Object { $_.Version -eq $RequiredVersion }
+            $candidates = $candidates | Where-Object -Property Version -EQ $RequiredVersion
         }
         $Module = $candidates | Select-Object -First 1
         if (-not $Module)
@@ -148,40 +276,74 @@ function Export-DscSchemaCache
     }
 
     Reset-DscKeywordState
-    $defaultFunctions = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,scriptblock]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+    $defaultFunctions = New-Object -TypeName 'System.Collections.Generic.Dictionary[System.String, ScriptBlock]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
     [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::LoadDefaultCimKeywords($defaultFunctions)
-    $defaultKeywordNames = New-Object -TypeName 'System.Collections.Generic.HashSet[string]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+    $defaultKeywordNames = New-Object -TypeName 'System.Collections.Generic.HashSet[System.String]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($keyword in [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::GetCachedKeywords())
     {
         $null = $defaultKeywordNames.Add($keyword.Keyword)
     }
 
-    $resources = New-Object -TypeName 'System.Collections.Generic.List[string]'
+    $resources = New-Object -TypeName 'System.Collections.Generic.List[System.String]'
     $resources.Add('*')
-    $throwaway = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,scriptblock]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+    $throwaway = New-Object -TypeName 'System.Collections.Generic.Dictionary[System.String, ScriptBlock]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
     $null = [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ImportClassResourcesFromModule($Module, $resources, $throwaway)
 
-    $keywords = @()
+    $dscResourcesPath = Join-Path $Module.ModuleBase 'DscResources'
+    if (Test-Path $dscResourcesPath)
+    {
+        foreach ($resourceDirectory in [System.IO.Directory]::EnumerateDirectories($dscResourcesPath))
+        {
+            $resourceName = Split-Path $resourceDirectory -Leaf
+            if (-not (Test-Path (Join-Path $resourceDirectory "$resourceName.schema.mof")))
+            {
+                continue
+            }
+            $schemaFilePath = $null
+            $keywordErrors = New-Object -TypeName 'System.Collections.ObjectModel.Collection[System.Exception]'
+            $null = [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ImportCimKeywordsFromModule(
+                $Module, $resourceName, [ref] $schemaFilePath, $throwaway, $keywordErrors)
+            foreach ($keywordError in $keywordErrors)
+            {
+                Write-Warning -Message "Schema of resource '$resourceName' was not imported: $($keywordError.Message)"
+            }
+        }
+    }
+
+    $keywords = New-Object -TypeName 'System.Collections.Generic.List[System.Object]'
     foreach ($keyword in [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::GetCachedKeywords())
     {
         if (-not $defaultKeywordNames.Contains($keyword.Keyword))
         {
-            $keywords += ConvertTo-DscKeywordSchemaObject -Keyword $keyword
+            $keywords.Add((ConvertTo-DscKeywordSchemaObject -Keyword $keyword))
         }
     }
 
-    $fingerprint = Get-DscModuleFingerprint -Module $Module
-    $sourceHash = @{}
-    foreach ($pattern in '*.psm1', '*.psd1', '*.mof')
+    Reset-DscKeywordState
+
+    $entries = Get-DscModuleSourceEntry -ModuleBase $Module.ModuleBase
+    $fingerprint = ConvertTo-DscSourceFingerprint -Entry $entries
+    $sources = [ordered]@{}
+    foreach ($item in $entries)
     {
-        foreach ($file in [System.IO.Directory]::EnumerateFiles($Module.ModuleBase, $pattern, [System.IO.SearchOption]::AllDirectories))
-        {
-            $relative = $file.Substring($Module.ModuleBase.Length).TrimStart('\', '/')
-            $sourceHash[$relative] = (Get-FileHash -Path $file -Algorithm SHA256).Hash
+        $sources[$item.Path] = @{
+            length = $item.Length
+            sha256 = (Get-FileHash -Path (Join-Path $Module.ModuleBase $item.Path) -Algorithm SHA256).Hash
         }
     }
 
-    $cache = @{
+    $index = [ordered]@{}
+    $resourceCount = 0
+    for ($i = 0; $i -lt $keywords.Count; $i++)
+    {
+        $index[[System.String]$keywords[$i].keyword] = $i + 2
+        if ($keywords[$i].nameMode -eq 'NameRequired')
+        {
+            $resourceCount++
+        }
+    }
+
+    $header = [ordered]@{
         formatVersion = $script:SchemaCacheFormatVersion
         generator     = @{
             psdscVersion = $ExecutionContext.SessionState.Module.Version.ToString()
@@ -191,12 +353,11 @@ function Export-DscSchemaCache
             name        = $Module.Name
             version     = $Module.Version.ToString()
             fingerprint = $fingerprint
-            sourceHash  = $sourceHash
         }
-        keywords      = $keywords
+        resourceCount = $resourceCount
+        keywordCount  = $keywords.Count
+        index         = $index
     }
-
-    Reset-DscKeywordState
 
     if (-not $OutputPath)
     {
@@ -207,14 +368,21 @@ function Export-DscSchemaCache
     {
         $null = New-Item -ItemType Directory -Force -Path $directory
     }
-    $json = ConvertTo-Json -InputObject $cache -Depth 12 -Compress
-    [System.IO.File]::WriteAllText($OutputPath, $json, [System.Text.UTF8Encoding]::new($false))
+
+    $lines = New-Object -TypeName 'System.Collections.Generic.List[System.String]'
+    $lines.Add((ConvertTo-Json -InputObject $header -Depth 6 -Compress))
+    $lines.Add((ConvertTo-Json -InputObject $sources -Depth 4 -Compress))
+    foreach ($keyword in $keywords)
+    {
+        $lines.Add((ConvertTo-Json -InputObject $keyword -Depth 12 -Compress))
+    }
+    [System.IO.File]::WriteAllLines($OutputPath, $lines, [System.Text.UTF8Encoding]::new($false))
 
     Write-Verbose -Message "Schema cache for $($Module.Name) $($Module.Version) written to $OutputPath ($($keywords.Count) keywords)."
     [PSCustomObject]@{
         ModuleName    = $Module.Name
         ModuleVersion = $Module.Version
-        ResourceCount = @($keywords | Where-Object { $_.nameMode -eq 'NameRequired' }).Count
+        ResourceCount = $resourceCount
         KeywordCount  = $keywords.Count
         Fingerprint   = $fingerprint
         Path          = $OutputPath
@@ -228,11 +396,11 @@ function Test-DscSchemaCache
     [OutputType([bool])]
     param (
         [Parameter(Mandatory)]
-        [string]
+        [System.String]
         $ModulePath,
 
         [Parameter(Mandatory)]
-        [string]
+        [System.String]
         $CachePath,
 
         [switch]
@@ -248,13 +416,21 @@ function Test-DscSchemaCache
     $manifestPath = if ([System.IO.Path]::GetExtension($ModulePath) -eq '.psd1') { $ModulePath } else { Get-ChildItem -Path $ModulePath -Filter '*.psd1' | Select-Object -First 1 -ExpandProperty FullName }
     $moduleBase = Split-Path $manifestPath -Parent
     $manifest = Import-PowerShellDataFile -Path $manifestPath
-    $cache = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($CachePath))
+    try
+    {
+        $cache = Read-DscSchemaCacheFile -Path $CachePath
+    }
+    catch
+    {
+        Write-Warning -Message "Schema cache '$CachePath' could not be read: $($_.Exception.Message)"
+        return $false
+    }
 
     $valid = $true
-    if ($cache.formatVersion -gt $script:SchemaCacheFormatVersion)
+    if ($cache.formatVersion -ne $script:SchemaCacheFormatVersion)
     {
-        Write-Warning -Message "Cache format version $($cache.formatVersion) is newer than supported ($script:SchemaCacheFormatVersion)."
-        $valid = $false
+        Write-Warning -Message "Cache format version $($cache.formatVersion) is not the supported version $script:SchemaCacheFormatVersion."
+        return $false
     }
     if ($cache.module.version -ne $manifest.ModuleVersion)
     {
@@ -262,7 +438,8 @@ function Test-DscSchemaCache
         $valid = $false
     }
 
-    foreach ($entry in $cache.module.sourceHash.PSObject.Properties)
+    $sources = Get-DscSchemaCacheSourceList -Cache $cache
+    foreach ($entry in $sources.PSObject.Properties)
     {
         $file = Join-Path $moduleBase $entry.Name
         if (-not (Test-Path $file))
@@ -270,7 +447,7 @@ function Test-DscSchemaCache
             Write-Warning -Message "File in cache no longer exists: $($entry.Name)"
             $valid = $false
         }
-        elseif ($Detailed -and (Get-FileHash -Path $file -Algorithm SHA256).Hash -ne $entry.Value)
+        elseif ($Detailed -and (Get-FileHash -Path $file -Algorithm SHA256).Hash -ne $entry.Value.sha256)
         {
             Write-Warning -Message "File changed since cache generation: $($entry.Name)"
             $valid = $false
@@ -281,52 +458,42 @@ function Test-DscSchemaCache
 }
 Export-ModuleMember -Function Test-DscSchemaCache
 
+# A file that appears next to the module later must not invalidate the cache. Only the
+# recorded files count.
 function Get-DscSchemaCacheSourceFingerprint
 {
-    [OutputType([string])]
+    [OutputType([System.String])]
     param (
         [Parameter(Mandatory)]
-        [string]
+        [System.String]
         $ModuleBase,
 
         [Parameter(Mandatory)]
         $Cache
     )
 
-    if ($null -eq $Cache.module.sourceHash)
-    {
-        return $null
-    }
-
-    $entries = @($Cache.module.sourceHash.PSObject.Properties)
-    if ($entries.Count -eq 0)
-    {
-        return $null
-    }
-
-    $maxTicks = [long]0
-    foreach ($entry in $entries)
+    $sources = Get-DscSchemaCacheSourceList -Cache $Cache
+    $entries = New-Object -TypeName 'System.Collections.Generic.List[System.Object]'
+    foreach ($entry in $sources.PSObject.Properties)
     {
         $file = Join-Path $ModuleBase $entry.Name
         if (-not [System.IO.File]::Exists($file))
         {
             return $null
         }
-        $ticks = [System.IO.File]::GetLastWriteTimeUtc($file).Ticks
-        if ($ticks -gt $maxTicks)
-        {
-            $maxTicks = $ticks
-        }
+        $entries.Add([PSCustomObject]@{ Path = $entry.Name; Length = [System.IO.FileInfo]::new($file).Length })
     }
-
-    "$($entries.Count):$maxTicks"
+    if ($entries.Count -eq 0)
+    {
+        return $null
+    }
+    ConvertTo-DscSourceFingerprint -Entry @($entries | Sort-Object -Property Path)
 }
 
 function Get-DscSchemaCache
 {
     param (
         [Parameter(Mandatory)]
-        [System.Management.Automation.PSModuleInfo]
         $Module,
 
         [string[]]
@@ -350,16 +517,16 @@ function Get-DscSchemaCache
         }
         try
         {
-            $cache = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($candidate))
+            $cache = Read-DscSchemaCacheFile -Path $candidate
         }
         catch
         {
-            Write-Warning -Message "Schema cache '$candidate' could not be parsed: $($_.Exception.Message)"
+            Write-Warning -Message "Schema cache '$candidate' could not be read: $($_.Exception.Message)"
             continue
         }
-        if ($cache.formatVersion -gt $script:SchemaCacheFormatVersion)
+        if ($cache.formatVersion -ne $script:SchemaCacheFormatVersion)
         {
-            Write-Warning -Message "Schema cache '$candidate' has unsupported format version $($cache.formatVersion)."
+            Write-Verbose -Message "Schema cache '$candidate' has format version $($cache.formatVersion), expected $script:SchemaCacheFormatVersion."
             continue
         }
         if ($cache.module.name -ne $Module.Name -or $cache.module.version -ne $Module.Version.ToString())
@@ -367,15 +534,14 @@ function Get-DscSchemaCache
             Write-Warning -Message "Schema cache '$candidate' is for $($cache.module.name) $($cache.module.version), not $($Module.Name) $($Module.Version)."
             continue
         }
-        $recorded = Get-DscSchemaCacheSourceFingerprint -ModuleBase $Module.ModuleBase -Cache $cache
-        if ($null -eq $recorded)
+        if ($cache.module.fingerprint -ne $fingerprint)
         {
-            $recorded = $fingerprint
-        }
-        if ($cache.module.fingerprint -ne $recorded)
-        {
-            Write-Verbose -Message "Schema cache '$candidate' is stale (module files changed)."
-            continue
+            $recorded = Get-DscSchemaCacheSourceFingerprint -ModuleBase $Module.ModuleBase -Cache $cache
+            if ($cache.module.fingerprint -ne $recorded)
+            {
+                Write-Verbose -Message "Schema cache '$candidate' is stale (module files changed)."
+                continue
+            }
         }
         return $cache
     }
@@ -387,13 +553,21 @@ function New-DscSchemaCacheForModule
 {
     param (
         [Parameter(Mandatory)]
-        [System.Management.Automation.PSModuleInfo]
         $Module
     )
 
-    $fingerprint = Get-DscModuleFingerprint -Module $Module
-    $userPath = Get-DscSchemaCacheUserPath -ModuleName $Module.Name -ModuleVersion $Module.Version -Fingerprint $fingerprint
-    Write-Verbose -Message "Generating schema cache for $($Module.Name) $($Module.Version) (one-time operation)."
-    $null = Export-DscSchemaCache -Module $Module -OutputPath $userPath
-    Get-DscSchemaCache -Module $Module -SchemaCachePath $userPath
+    $moduleInfo = $Module
+    if ($Module -isnot [System.Management.Automation.PSModuleInfo])
+    {
+        $moduleInfo = Get-Module -ListAvailable -Name $Module.Path | Select-Object -First 1
+        if ($null -eq $moduleInfo)
+        {
+            throw "Module manifest '$($Module.Path)' could not be loaded for schema discovery."
+        }
+    }
+    $fingerprint = Get-DscModuleFingerprint -Module $moduleInfo
+    $userPath = Get-DscSchemaCacheUserPath -ModuleName $moduleInfo.Name -ModuleVersion $moduleInfo.Version -Fingerprint $fingerprint
+    Write-Verbose -Message "Generating schema cache for $($moduleInfo.Name) $($moduleInfo.Version) (one-time operation)."
+    $null = Export-DscSchemaCache -Module $moduleInfo -OutputPath $userPath
+    Get-DscSchemaCache -Module $moduleInfo -SchemaCachePath $userPath
 }

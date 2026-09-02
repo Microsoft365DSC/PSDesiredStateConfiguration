@@ -317,18 +317,17 @@ sequenceDiagram
     D-->>Caller: .mof files
 ```
 
-Before any of that can run, the text has to be rewritten four times, and every rewrite is steered by
-an AST taken from a masked copy rather than from the text itself.
+Before any of that can run, the text has to be rewritten, and every rewrite is steered by an AST
+taken from a masked copy rather than from the text itself. One parse serves every edit, and
+`ConvertTo-FastHostCompileText` applies all of them to the original text in a single pass.
 
 ```mermaid
 flowchart LR
     src["original text"] --> mask["mask the word Configuration<br/>in a copy"]
-    mask --> parse["Parser.ParseInput<br/><i>about 8 ms</i>"]
-    parse --> collect["collect configuration names<br/>and Import-DscResource ASTs"]
-    collect --> strip["remove import extents<br/>from the original text"]
-    strip --> merge["Merge-FastHostResourceStatements"]
-    merge --> hash["Convert-FastHostBodyToHashtable"]
-    hash --> sb["scriptblock::Create"]
+    mask --> parse["Parser.ParseInput<br/><i>once</i>"]
+    parse --> collect["collect configuration names,<br/>Import-DscResource ASTs,<br/>next-line braces, keyword bodies"]
+    collect --> apply["ConvertTo-FastHostCompileText<br/>one pass over the text"]
+    apply --> sb["scriptblock::Create"]
 ```
 
 ### Masking instead of parsing
@@ -390,8 +389,10 @@ argument happens to be a hashtable literal.
 
 ### Adapters
 
-`Register-DscCachedKeywords` rehydrates every cache entry into a real `DynamicKeyword` object and
-stores it in a case insensitive dictionary. Each keyword gets the same shared adapter scriptblock,
+`Register-DscSchemaCache` keeps the cache as text lines plus the keyword index and registers the
+adapters for every name in the index. `Get-FastHostKeyword` deserializes a keyword line into a real
+`DynamicKeyword` the first time a compile asks for it and keeps it in a case insensitive dictionary,
+so a compile pays for the keywords it uses and not for the whole module. Each keyword gets the same shared adapter scriptblock,
 registered twice, under the bare name and under the module qualified name, because a configuration
 body may call it either way. When the fast host is active the `Configuration` function merges those
 adapters plus four accessors (`Get-FastHostKeyword`, `Get-FastHostBodyScriptBlock`,
@@ -425,7 +426,7 @@ reason.
 | `Import-DscResource` with non constant arguments | The module set cannot be determined without executing the script |
 | `-Name` without `-ModuleName` | Would require scanning every installed module |
 | The named module is not installed, or not in the requested version | Nothing to resolve a cache against |
-| The module contains `*.schema.mof` or `*.schema.psm1` under `DscResources` | Script based and composite resources need the engine's own import |
+| The module contains `*.schema.psm1` under `DscResources` | Composite resources need the engine's own import |
 | No usable schema cache and none can be generated | Nothing to register keywords from |
 
 `-NoFallback` turns each of these into a terminating error. Continuous integration should use it,
@@ -438,8 +439,9 @@ passing job.
 
 `Export-DscSchemaCache` resets the keyword state, loads the default keywords and remembers their
 names, imports the module's class based resources once through
-`DscClassCache::ImportClassResourcesFromModule`, and serializes every cached keyword that was not
-already a default. It resets the keyword state afterwards as well, so generating a cache does not
+`DscClassCache::ImportClassResourcesFromModule`, reads every `DscResources\<Name>\<Name>.schema.mof`
+through `ImportCimKeywordsFromModule`, and serializes every cached keyword that was not already a
+default. It resets the keyword state afterwards as well, so generating a cache does not
 leave the session holding the module's classes.
 
 Default output is `<ModuleBase>\DscSchemaCache.json`. The summary it returns carries the module name
@@ -459,7 +461,7 @@ flowchart TB
     c -->|no| gen["Export-DscSchemaCache<br/><i>one time, about 6 s</i>"]
     gen --> persist["persist to the user cache"] --> use
     subgraph valid["valid means"]
-        v1["formatVersion not newer than known"]
+        v1["formatVersion is the known one"]
         v2["module name and version match"]
         v3["fingerprint matches"]
     end
@@ -468,16 +470,20 @@ flowchart TB
 The user cache lives at
 `%LOCALAPPDATA%\M365DSC.PSDesiredStateConfiguration\SchemaCache\<Name>_<Version>_<fingerprint>.json`.
 
-A cache has to earn its place before any of its keywords are used. Its format version may not be
-newer than the reader knows, its module name and version have to match, and so does its fingerprint.
-That fingerprint is `fileCount:maxLastWriteTimeUtcTicks` over `*.psm1`, `*.psd1` and `*.mof` below the
-module base, which lets any added, removed or rewritten file invalidate the cache without hashing a
-single byte at compile time. `Test-DscSchemaCache` checks the format and module version too, and with
-`-Detailed` it re-hashes every file recorded in `sourceHash`, which is the accurate but slow variant
-that belongs in a CI drift gate.
+A cache has to earn its place before any of its keywords are used. Its format version has to be the
+one the reader knows, its module name and version have to match, and so does its fingerprint. That
+fingerprint is `fileCount:totalBytes:hash` over the sorted relative paths and sizes of every `*.psm1`,
+`*.psd1` and `*.mof` file below the module base. It carries no write times, which is what lets the
+cache shipped inside a package stay valid after `Install-Module` copied the files. When the file set
+grew, the fingerprint is recomputed over the files the cache recorded, so an unrelated file placed
+next to the module does not invalidate it. A file edited to the same size slips through, which is why
+the build regenerates the cache and why `Test-DscSchemaCache -Detailed` re-hashes every recorded file
+in a CI drift gate.
 
-Registration is remembered per module and version for the life of the session, so a second compile in
-the same process reuses the keyword table and touches no JSON.
+The module named by `Import-DscResource` is located with a scan of `PSModulePath` for the manifest,
+not with `Get-Module -ListAvailable`, which analyzes every nested module and costs seconds for a
+large resource module. Registration is remembered per module and version for the life of the session,
+so a second compile in the same process reuses the keyword table and touches no JSON.
 
 ### Format
 
@@ -658,8 +664,8 @@ what makes the numbers in this document worth quoting.
 
 **The cache is the contract on the fast path.** A property that exists in the resource source but not
 in the cache does not exist as far as compilation is concerned. The fingerprint check is the only
-thing keeping the two honest, and a cache has to be regenerated after any step that adds or trims
-files in the module tree, because those files feed the fingerprint.
+thing keeping the two honest, and a cache has to be regenerated after any step that adds, trims or
+resizes files in the module tree, because those files feed the fingerprint.
 
 **Never call `LoadDefaultCimKeywords` to warm a cache.** It belongs in exactly one place, the top
 level compile that populates `functionsToDefine`. Calling it to inspect keyword state clears

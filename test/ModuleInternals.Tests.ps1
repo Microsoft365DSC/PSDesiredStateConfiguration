@@ -89,10 +89,10 @@ Describe 'Get-DscModuleFingerprint' {
         $script:FingerprintModule = Get-Module -ListAvailable (Join-Path $script:FingerprintRoot 'xTestClassResource\xTestClassResource.psd1')
     }
 
-    It 'counts the module files and takes the newest write time' {
+    It 'counts the module files, sums their sizes and hashes the size list' {
         $fingerprint = Invoke-PSDscInEngineScope { Get-DscModuleFingerprint -Module $args[0] } $script:FingerprintModule
 
-        $fingerprint | Should -Match '^2:[0-9]+$'
+        $fingerprint | Should -Match '^2:[0-9]+:[0-9a-f]{16}$'
     }
 
     It 'changes when a module file is touched' {

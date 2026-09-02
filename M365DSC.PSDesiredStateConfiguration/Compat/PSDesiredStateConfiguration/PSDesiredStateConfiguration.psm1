@@ -13,6 +13,7 @@ $script:ForwardedCommands = @(
     'Invoke-DscFastCompile'
     'Export-DscSchemaCache'
     'Test-DscSchemaCache'
+    'Get-DscFastCompileTiming'
 )
 
 function Resolve-EngineManifest
