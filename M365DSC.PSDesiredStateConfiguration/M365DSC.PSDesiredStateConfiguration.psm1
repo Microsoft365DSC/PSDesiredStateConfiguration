@@ -93,6 +93,8 @@ $script:FastHostAdapters = $null
 $script:FastHostBodyCache = @{}
 $script:FastHostRegisteredModules = @{}
 $script:FastHostResolvedModules = @{}
+$script:FastHostKeywordSource = $null
+$script:FastHostTiming = $null
 function Get-CimKeywordImplementationFunction
 {
     [OutputType([scriptblock])]
@@ -116,27 +118,11 @@ function Get-DscModuleFingerprint
     [OutputType([string])]
     param (
         [Parameter(Mandatory)]
-        [System.Management.Automation.PSModuleInfo]
         $Module
     )
 
-    $count = 0
-    $maxTicks = [long]0
-    foreach ($pattern in '*.psm1', '*.psd1', '*.mof')
-    {
-        foreach ($file in [System.IO.Directory]::EnumerateFiles($Module.ModuleBase, $pattern, [System.IO.SearchOption]::AllDirectories))
-        {
-            $count++
-            $ticks = [System.IO.File]::GetLastWriteTimeUtc($file).Ticks
-            if ($ticks -gt $maxTicks)
-            {
-                $maxTicks = $ticks
-            }
-        }
-    }
-    "${count}:$maxTicks"
+    ConvertTo-DscSourceFingerprint -Entry (Get-DscModuleSourceEntry -ModuleBase $Module.ModuleBase)
 }
-
 function Reset-DscKeywordState
 {
     [OutputType([void])]
@@ -514,7 +500,7 @@ function ConvertTo-MOFInstance
         $script:PsDscCompatibleVersion = "2.0.0"
     }
     # Look up the keyword definition; fast-host keywords take precedence over the parser table.
-    $keywordDefinition = if ($script:FastHostKeywords) { $script:FastHostKeywords[$Type] } else { $null }
+    $keywordDefinition = Get-FastHostKeyword -Name $Type
     if ($null -eq $keywordDefinition)
     {
         $keywordDefinition = [System.Management.Automation.Language.DynamicKeyword]::GetKeyword($Type)

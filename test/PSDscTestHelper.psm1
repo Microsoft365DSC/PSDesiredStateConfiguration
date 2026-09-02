@@ -170,6 +170,9 @@ function Reset-PSDscFastHostState
         $script:FastHostRegisteredModules = @{}
         $script:FastHostKeywords = $null
         $script:FastHostAdapters = $null
+        $script:FastHostKeywordSource = $null
+        $script:FastHostResolvedModules = @{}
+        $script:FastHostTiming = $null
     }
 }
 
