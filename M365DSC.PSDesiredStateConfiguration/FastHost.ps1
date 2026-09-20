@@ -829,8 +829,9 @@ function Invoke-DscFastCompile
 
     foreach ($module in $resolvedModules)
     {
+        $moduleState = '{0}|{1}' -f $module.Version.ToString(), (Get-DscModuleFingerprint -Module $module)
         $registered = $script:FastHostRegisteredModules[$module.Name]
-        if ($registered -and $registered -eq $module.Version.ToString() -and -not $Force)
+        if ($registered -and $registered -eq $moduleState -and -not $Force)
         {
             continue
         }
@@ -853,7 +854,7 @@ function Invoke-DscFastCompile
             return Invoke-DscFastCompileBody -Text $ScriptText -ConfigurationName $ConfigurationName -Parameters $Parameters -ConfigurationData $ConfigurationData -OutputPath $OutputPath -ScriptPath $Path -ConfigurationNames $stripResult.ConfigurationNames
         }
         Register-DscSchemaCache -Cache $cache
-        $script:FastHostRegisteredModules[$module.Name] = $module.Version.ToString()
+        $script:FastHostRegisteredModules[$module.Name] = $moduleState
     }
     $timing['cache'] = $stopwatch.ElapsedMilliseconds
     $stopwatch.Restart()
