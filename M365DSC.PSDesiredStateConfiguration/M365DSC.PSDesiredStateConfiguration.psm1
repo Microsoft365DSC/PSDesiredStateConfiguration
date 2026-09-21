@@ -516,6 +516,12 @@ function ConvertTo-MOFInstance
 
     Write-Debug -Message "        BEGIN MOF GENERATION FOR $Type"
 
+    $AliasSeparator = ''
+    if ($ResourceName -match '\d$')
+    {
+        $AliasSeparator = '_'
+    }
+
     # Generate the MOF instance alias to use for the current node
     if ( (Get-PSCurrentConfigurationNode) )
     {
@@ -525,12 +531,12 @@ function ConvertTo-MOFInstance
             New-Object -TypeName 'System.Collections.Generic.Dictionary[string, System.Collections.Generic.Dictionary[string,int]]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
         }
 
-        $MofAliasString = '$' + $ResourceName + ++$Script:NodeTypeRefCount[ (Get-PSCurrentConfigurationNode) ][$ResourceName] + 'ref'
+        $MofAliasString = '$' + $ResourceName + $AliasSeparator + ++$Script:NodeTypeRefCount[ (Get-PSCurrentConfigurationNode) ][$ResourceName] + 'ref'
         $InstanceAliases = $Script:NodeInstanceAliases[ (Get-PSCurrentConfigurationNode) ]
     }
     else #  Generate the MOF instance alias to use for the default (unnamed) node.
     {
-        $MofAliasString = '$' + $ResourceName + ++$Script:NoNameNodeTypeRefCount[$ResourceName] + 'ref'
+        $MofAliasString = '$' + $ResourceName + $AliasSeparator + ++$Script:NoNameNodeTypeRefCount[$ResourceName] + 'ref'
         $InstanceAliases = $Script:NoNameNodeInstanceAliases
     }
 

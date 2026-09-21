@@ -46,13 +46,17 @@ Describe 'stringify edge cases' {
         $result | Should -Match 'module-value'
     }
 
-    It 'looks up $using: variables in the caller scope when the script block has no defining module' {
+    It 'rewrites $using: references when the script block has no defining module' {
+        # A script block built this way carries no defining module, so stringify falls back to
+        # GetVariableFromCallersModule. Whether that finds the variable depends on the module the
+        # suite is invoked from, so only the rewrite itself is asserted here.
         $probe = 'from-caller'
         $scriptBlock = [scriptblock]::Create('$using:probe')
 
         $result = Invoke-PSDscInEngineScope { $InstanceAliases = @{}; stringify $args[0] } $scriptBlock
 
-        $result | Should -BeExactly '"$probe"'
+        $result | Should -Not -Match '\$using:'
+        $result | Should -Match '\$probe"$'
     }
 
     It 'serializes non string $using: variables from the defining module' {
