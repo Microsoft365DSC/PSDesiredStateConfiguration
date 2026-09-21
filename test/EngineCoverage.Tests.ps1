@@ -6,9 +6,6 @@ BeforeAll {
     function Invoke-PSDscStringifyValue
     {
         param ($Value, [bool] $AsArray = $false, [type] $TargetType = [System.String])
-
-        # stringify reads the alias table of the instance being rendered out of its caller
-        # scope, which is ConvertTo-MOFInstance during a real compilation.
         Invoke-PSDscInEngineScope {
             $InstanceAliases = @{}
             stringify $args[0] $args[1] $args[2]
@@ -47,9 +44,6 @@ Describe 'stringify edge cases' {
     }
 
     It 'rewrites $using: references when the script block has no defining module' {
-        # A script block built this way carries no defining module, so stringify falls back to
-        # GetVariableFromCallersModule. Whether that finds the variable depends on the module the
-        # suite is invoked from, so only the rewrite itself is asserted here.
         $probe = 'from-caller'
         $scriptBlock = [scriptblock]::Create('$using:probe')
 
