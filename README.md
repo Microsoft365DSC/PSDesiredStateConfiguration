@@ -11,7 +11,7 @@ The fork is rebased onto the upstream v2.0.7 pure-script lineage, with a couple 
 
 - Dual-edition support (Windows PowerShell 5.1 and PowerShell 7) from a single module.
 - Deterministic MOF output: no `Author`/`GenerationDate`/`GenerationHost` stamps, LF line endings,
-  UTF-8 without BOM on both editions.
+  UTF-16LE with BOM (the encoding the DSC engine requires) on both editions.
 - A fast compilation host (`Invoke-DscFastCompile`) backed by a persistent JSON schema cache:
   fresh-process compiles between 5x and 10x faster than a default run.
 - Upstream MOF emission fixes [#127](https://github.com/PowerShell/PSDesiredStateConfiguration/pull/127)
