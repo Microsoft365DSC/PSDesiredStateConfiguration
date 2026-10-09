@@ -1103,3 +1103,152 @@ Configuration ForceCfg
         }
     }
 }
+
+Describe 'Deterministic MOF output' {
+    BeforeAll {
+        # PowerShell 7 seeds string hash codes per process.
+        $script:PSDscDeterminismProbe = Join-Path $TestDrive 'probe-determinism.ps1'
+        Set-Content -Path $script:PSDscDeterminismProbe -Encoding UTF8 -Value @'
+param
+(
+    [string] $Repo,
+    [string] $Out,
+    [string] $Mode
+)
+
+$separator = [System.IO.Path]::PathSeparator
+$env:PSModulePath = (Join-Path $Repo 'test\TestModules') + $separator + $env:PSModulePath
+Import-Module (Join-Path $Repo 'M365DSC.PSDesiredStateConfiguration\M365DSC.PSDesiredStateConfiguration.psd1') -Force
+
+$configurationText = @(
+    'Configuration DeterministicCfg'
+    '{'
+    '    param ([PSCredential] $Credential)'
+    '    Import-DscResource -ModuleName xTestClassResource'
+    '    Import-DscResource -ModuleName xTestCredentialResource'
+    '    Node localhost'
+    '    {'
+    '        xTestClassResource r1'
+    '        {'
+    "            Name = 'r1'"
+    "            Value = 'v1'"
+    "            Settings = 's1'"
+    "            Ensure = 'Present'"
+    "            sArray = @('a', 'b')"
+    '            bValue = $true'
+    '            sInt32Value = 5'
+    '            uInt16Value = 7'
+    '            Real64Value = 1.5'
+    "            HashTableValue = @{ k1 = 'v1'; k2 = 'v2'; k3 = 'v3'; alpha = 'a'; beta = 'b'; gamma = 'g' }"
+    "            EmbClassObj = EmbClass { EmbClassStr1 = 'emb1'; User = 'u1' }"
+    '        }'
+    '        xTestCredentialResource c1'
+    '        {'
+    "            Name = 'c1'"
+    "            Value = 'cv'"
+    '            Credential = $Credential'
+    "            DependsOn = '[xTestClassResource]r1'"
+    '        }'
+    '    }'
+    '}'
+) -join [Environment]::NewLine
+
+$credential = [PSCredential]::new('det-user', (ConvertTo-SecureString -String 'Det3rm1n1sm!' -AsPlainText -Force))
+$configurationData = @{ AllNodes = @(@{ NodeName = 'localhost'; PSDscAllowPlainTextPassword = $true }) }
+
+if ($Mode -eq 'Fast')
+{
+    $null = Invoke-DscFastCompile -ScriptText $configurationText -OutputPath $Out -NoFallback `
+        -Parameters @{ Credential = $credential } -ConfigurationData $configurationData
+}
+else
+{
+    Invoke-Expression $configurationText
+    $null = DeterministicCfg -OutputPath $Out -Credential $credential -ConfigurationData $configurationData
+}
+
+[System.Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-Path $Out 'localhost.mof')))
+'@
+
+        function Invoke-PSDscDeterminismProbe
+        {
+            param
+            (
+                [string] $Shell,
+                [string] $Mode,
+                [string] $Name
+            )
+
+            $output = & $Shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script:PSDscDeterminismProbe `
+                -Repo $script:PSDscRepoRoot -Out (Join-Path $TestDrive $Name) -Mode $Mode
+            $encoded = @($output) | Where-Object { $_ -is [System.String] -and $_ -match '^[A-Za-z0-9+/]{16,}={0,2}$' } | Select-Object -Last 1
+            if (-not $encoded)
+            {
+                throw "The $Mode probe on '$Shell' produced no MOF: $($output -join [Environment]::NewLine)"
+            }
+            [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($encoded))
+        }
+
+        function Get-PSDscMofInstancePropertyName
+        {
+            param
+            (
+                [string] $Mof,
+                [string] $ClassName
+            )
+
+            $match = [regex]::Match($Mof, "instance of $ClassName as [^\n]*\n\{\n(?<body>.*?)(?=instance of |\z)", [System.Text.RegularExpressions.RegexOptions]::Singleline)
+            $match.Success | Should -Be $true
+            @([regex]::Matches($match.Groups['body'].Value, '(?m)^\s*(\w+)\s*=') | ForEach-Object { $_.Groups[1].Value })
+        }
+
+        $script:PSDscCurrentShell = (Get-Process -Id $PID).Path
+    }
+
+    It 'writes byte-identical MOF from two separate processes on the <Mode> path' -TestCases @(
+        @{ Mode = 'Fast' }
+        @{ Mode = 'Standard' }
+    ) {
+        $first = Invoke-PSDscDeterminismProbe -Shell $script:PSDscCurrentShell -Mode $Mode -Name "$Mode-first"
+        $second = Invoke-PSDscDeterminismProbe -Shell $script:PSDscCurrentShell -Mode $Mode -Name "$Mode-second"
+
+        $second | Should -BeExactly $first
+    }
+
+    It 'writes the properties of every instance in ordinal name order on the <Mode> path' -TestCases @(
+        @{ Mode = 'Fast' }
+        @{ Mode = 'Standard' }
+    ) {
+        $mof = Invoke-PSDscDeterminismProbe -Shell $script:PSDscCurrentShell -Mode $Mode -Name "$Mode-order"
+
+        foreach ($className in 'xTestClassResource', 'EmbClass', 'MSFT_Credential', 'xTestCredentialResource')
+        {
+            $names = @(Get-PSDscMofInstancePropertyName -Mof $mof -ClassName $className |
+                    Where-Object { $_ -notin 'DependsOn', 'ConfigurationName' })
+            $sorted = [string[]]$names.Clone()
+            [System.Array]::Sort($sorted, [System.StringComparer]::Ordinal)
+            ($names -join ',') | Should -BeExactly ($sorted -join ',') -Because "the $className instance lists its properties in name order"
+        }
+
+        $keys = @([regex]::Matches($mof, 'instance of MSFT_KeyValuePair as [^\n]*\n\{\nKey = "(\w+)"') | ForEach-Object { $_.Groups[1].Value })
+        ($keys -join ',') | Should -BeExactly 'alpha,beta,gamma,k1,k2,k3'
+    }
+
+    It 'writes byte-identical MOF on Windows PowerShell 5.1 and PowerShell 7 on the <Mode> path' -TestCases @(
+        @{ Mode = 'Fast' }
+        @{ Mode = 'Standard' }
+    ) {
+        $desktop = Get-Command -Name 'powershell' -CommandType Application -ErrorAction Ignore | Select-Object -First 1
+        $core = Get-Command -Name 'pwsh' -CommandType Application -ErrorAction Ignore | Select-Object -First 1
+        if ($null -eq $desktop -or $null -eq $core)
+        {
+            Set-ItResult -Skipped -Because 'both Windows PowerShell 5.1 and PowerShell 7 are required'
+            return
+        }
+
+        $desktopMof = Invoke-PSDscDeterminismProbe -Shell $desktop.Source -Mode $Mode -Name "$Mode-desktop"
+        $coreMof = Invoke-PSDscDeterminismProbe -Shell $core.Source -Mode $Mode -Name "$Mode-core"
+
+        $coreMof | Should -BeExactly $desktopMof
+    }
+}
