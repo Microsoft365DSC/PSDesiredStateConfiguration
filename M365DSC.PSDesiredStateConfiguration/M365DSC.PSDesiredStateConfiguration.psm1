@@ -286,6 +286,25 @@ function IsDomainUser()
     $true
 }
 
+function Get-DictionaryEntrySortedByKey
+{
+    [OutputType([System.Collections.DictionaryEntry])]
+    param (
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [System.Collections.IDictionary]
+        $Dictionary
+    )
+
+    $keys = [System.Object[]]@($Dictionary.Keys)
+    $names = [System.String[]]@(foreach ($key in $keys) { [System.String]$key })
+    [System.Array]::Sort([System.Array]$names, [System.Array]$keys, [System.Collections.IComparer][System.StringComparer]::Ordinal)
+    foreach ($key in $keys)
+    {
+        [System.Collections.DictionaryEntry]::new($key, $Dictionary[$key])
+    }
+}
+
 #
 # Utility routine to render a property
 # as a string in MOF syntax.
@@ -325,7 +344,7 @@ function stringify ($Value, $asArray = $false, $targetType = [string])
     elseif ($Value -is [System.Collections.Hashtable])
     {
         # Collect the individual strings
-        $elementsAsStrings = foreach ($p in $Value.GetEnumerator())
+        $elementsAsStrings = foreach ($p in (Get-DictionaryEntrySortedByKey -Dictionary $Value))
         {
             ConvertTo-MOFInstance MSFT_KeyValuePair @{
                 Key   = $p.Key
@@ -559,7 +578,7 @@ function ConvertTo-MOFInstance
     {
         if ($Properties -and $Properties.Count)
         {
-            foreach ($p in $Properties.GetEnumerator())
+            foreach ($p in (Get-DictionaryEntrySortedByKey -Dictionary $Properties))
             {
                 Write-Debug -Message "          Generating property data for '$($p.Name)' = '$($p.Value)'"
                 $targetTypeName = $PropertyTypes[$p.Name].TypeConstraint
