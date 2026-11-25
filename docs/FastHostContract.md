@@ -23,16 +23,18 @@ Compiles a configuration script without triggering the engine's parse-time resou
 
 ```powershell
 Invoke-DscFastCompile
-    -Path <string> | -ScriptText <string>
+    -Path <string> | -ScriptText <string> | -Prepared <object>
     [-ConfigurationName <string>]       # required only when the script defines several configurations and does not invoke one itself
     [-Parameters <hashtable>]           # splatted onto the configuration invocation
     [-ConfigurationData <hashtable|string>]
     [-OutputPath <string>]
-    [-SchemaCachePath <string[]>]       # explicit cache files; otherwise resolution order below
-    [-Force]                            # ignore every cache on disk, generate a fresh one and use it
+    [-SchemaCachePath <string[]>]       # explicit cache files; otherwise resolution order below (not with -Prepared)
+    [-Force]                            # ignore every cache on disk, generate a fresh one and use it (not with -Prepared)
     [-ValidateMof]                      # opt-in MI validation (requires live CIM classes, slower)
     [-NoFallback]                       # fail instead of degrading to the standard path
 ```
+
+`-Prepared` takes the result of `ConvertTo-DscFastCompileText` from the same session and compiles its `Text` without preparing it again.
 
 Returns the generated `.mof` files (`FileInfo[]`). Scripts that invoke their own configuration (the Microsoft365DSC export shape) run as-is; the self-invocation performs the compilation.
 
@@ -42,13 +44,24 @@ Modules named by `Import-DscResource` are located by scanning `$env:PSModulePath
 
 Falls back to standard compilation (with a warning) when: an `Import-DscResource` uses non-constant arguments or `-Name` without `-ModuleName`; a module contains composite (`*.schema.psm1`) resources; or no usable schema cache can be obtained. Class-based resources and schema-based (`*.schema.mof`) resources compile on the fast path.
 
+### ConvertTo-DscFastCompileText
+
+```powershell
+ConvertTo-DscFastCompileText
+    -Path <string> | -ScriptText <string>
+    [-SchemaCachePath <string[]>]
+    [-Force]
+```
+
+Runs the preparation of `Invoke-DscFastCompile` and returns its result instead of compiling: `Supported`, `Reason` (why the fast path is not possible), `MissingCacheModule` (the module without a usable schema cache), `Text` (the script text the fast host executes: `Import-DscResource` statements removed and every resource property block rewritten to a hashtable literal), `SourceText`, `Path`, `ConfigurationNames` and `KeywordNames` (the resource keywords registered from the schema caches). Parsing `Text` does not import any resource module, so a caller can inspect the exact text a later `Invoke-DscFastCompile -Prepared` compiles.
+
 ### Get-DscFastCompileTiming
 
 ```powershell
 Get-DscFastCompileTiming
 ```
 
-Returns an ordered dictionary with the milliseconds of the last `Invoke-DscFastCompile` in this session: `parse`, `resolve`, `cache`, `rewrite`, `compile` and `total`. `$null` before the first compile.
+Returns an ordered dictionary with the milliseconds of the last `Invoke-DscFastCompile` or `ConvertTo-DscFastCompileText` in this session: `parse`, `resolve`, `cache`, `rewrite`, `compile` and `total` (a prepared compile records only `compile` and `total`). `$null` before the first compile.
 
 ### Export-DscSchemaCache
 

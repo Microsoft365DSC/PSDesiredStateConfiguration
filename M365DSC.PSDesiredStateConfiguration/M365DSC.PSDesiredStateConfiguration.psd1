@@ -9,7 +9,7 @@
     RootModule = 'M365DSC.PSDesiredStateConfiguration.psm1'
 
     # Version number of this module.
-    ModuleVersion = '3.1.10'
+    ModuleVersion = '3.1.11'
 
     # Supported PSEditions
     CompatiblePSEditions = @('Desktop', 'Core')
@@ -72,6 +72,7 @@
             'Get-DscResource'
             'Invoke-DscResource'
             'Invoke-DscFastCompile'
+            'ConvertTo-DscFastCompileText'
             'Export-DscSchemaCache'
             'Test-DscSchemaCache'
             'Get-DscFastCompileTiming'

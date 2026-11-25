@@ -183,93 +183,107 @@ $complexResourceQualifier = Get-ComplexResourceQualifier -IncludeCurrent
     }
 
     # Copy the user-supplied values into a new collection with canonicalized property names
-    foreach ($key in $keywordData.Properties.Keys)
+    $copiedKeyValues = $null
+    if ($script:FastPropertyWriting -and -not $OldMetaConfig -and $DebugPreference -eq 'SilentlyContinue' -and
+        $keywordData -is [System.Management.Automation.Language.DynamicKeyword] -and $value -is [System.Collections.IDictionary])
     {
-        Write-Debug "${debugPrefix} Processing property '$key' ["
+        $copiedKeyValues = [M365DSC.PSDesiredStateConfiguration.ResourceValueCopier]::CopyValues($value, $keywordData, $canonicalizedValue)
+    }
 
-        if ($value.Contains($key))
+    if ($null -ne $copiedKeyValues)
+    {
+        $keyValues = $copiedKeyValues
+    }
+    else
+    {
+        foreach ($key in $keywordData.Properties.Keys)
         {
-            if ($OldMetaConfig -and (-not ($V1MetaConfigPropertyList -contains $key)))
+            Write-Debug "${debugPrefix} Processing property '$key' ["
+
+            if ($value.Contains($key))
             {
-                Write-Error -ErrorRecord ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::InvalidLocalConfigurationManagerPropertyErrorRecord($key, ($V1MetaConfigPropertyList -join ', ')))
-                Update-ConfigurationErrorCount
-            }
-            # see if there is a list of allowed values for this property (similar to an enum)
-            $allowedValues = $keywordData.Properties[$key].Values
-            # If there is and user-provided value is not in that list, write an error.
-            if ($allowedValues)
-            {
-                if(($null -eq $value[$key]) -and ($allowedValues -notcontains $value[$key]))
+                if ($OldMetaConfig -and (-not ($V1MetaConfigPropertyList -contains $key)))
                 {
-                    Write-Error -ErrorRecord ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::InvalidValueForPropertyErrorRecord($key, "$($value[$key])", $keywordData.Keyword, ($allowedValues -join ', ')))
+                    Write-Error -ErrorRecord ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::InvalidLocalConfigurationManagerPropertyErrorRecord($key, ($V1MetaConfigPropertyList -join ', ')))
                     Update-ConfigurationErrorCount
                 }
-                else
+                # see if there is a list of allowed values for this property (similar to an enum)
+                $allowedValues = $keywordData.Properties[$key].Values
+                # If there is and user-provided value is not in that list, write an error.
+                if ($allowedValues)
                 {
-                    $notAllowedValue=$null
-                    foreach($v in $value[$key])
+                    if(($null -eq $value[$key]) -and ($allowedValues -notcontains $value[$key]))
                     {
-                        if($allowedValues -notcontains $v)
+                        Write-Error -ErrorRecord ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::InvalidValueForPropertyErrorRecord($key, "$($value[$key])", $keywordData.Keyword, ($allowedValues -join ', ')))
+                        Update-ConfigurationErrorCount
+                    }
+                    else
+                    {
+                        $notAllowedValue=$null
+                        foreach($v in $value[$key])
                         {
-                            $notAllowedValue +=$v.ToString() + ', '
+                            if($allowedValues -notcontains $v)
+                            {
+                                $notAllowedValue +=$v.ToString() + ', '
+                            }
+                        }
+
+                        if($notAllowedValue)
+                        {
+                            $notAllowedValue = $notAllowedValue.Substring(0, $notAllowedValue.Length -2)
+                            Write-Error -ErrorRecord ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::UnsupportedValueForPropertyErrorRecord($key, $notAllowedValue, $keywordData.Keyword, ($allowedValues -join ', ')))
+                            Update-ConfigurationErrorCount
                         }
                     }
+                }
 
-                    if($notAllowedValue)
+                # see if a value range is defined for this property
+                $allowedRange = $keywordData.Properties[$key].Range
+                if($allowedRange)
+                {
+                    $castedValue = $value[$key] -as [int]
+                    if((($castedValue -is [int]) -and (($castedValue -lt  $keywordData.Properties[$key].Range.Item1) -or ($castedValue -gt $keywordData.Properties[$key].Range.Item2))) -or ($null -eq $castedValue))
                     {
-                        $notAllowedValue = $notAllowedValue.Substring(0, $notAllowedValue.Length -2)
-                        Write-Error -ErrorRecord ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::UnsupportedValueForPropertyErrorRecord($key, $notAllowedValue, $keywordData.Keyword, ($allowedValues -join ', ')))
+                        Write-Error -ErrorRecord ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ValueNotInRangeErrorRecord($key, $keywordName, $value[$key],  $keywordData.Properties[$key].Range.Item1,  $keywordData.Properties[$key].Range.Item2))
                         Update-ConfigurationErrorCount
                     }
                 }
-            }
 
-            # see if a value range is defined for this property
-            $allowedRange = $keywordData.Properties[$key].Range
-            if($allowedRange)
-            {
-                $castedValue = $value[$key] -as [int]
-                if((($castedValue -is [int]) -and (($castedValue -lt  $keywordData.Properties[$key].Range.Item1) -or ($castedValue -gt $keywordData.Properties[$key].Range.Item2))) -or ($null -eq $castedValue))
+                Write-Debug "${debugPrefix}        Canonicalized property '$key' = '$($value[$key])'"
+
+                if ($keywordData.Properties[$key].IsKey)
                 {
-                    Write-Error -ErrorRecord ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ValueNotInRangeErrorRecord($key, $keywordName, $value[$key],  $keywordData.Properties[$key].Range.Item1,  $keywordData.Properties[$key].Range.Item2))
-                    Update-ConfigurationErrorCount
+                    if($null -eq $value[$key])
+                    {
+                        $keyValues += "::__NULL__"
+                    }
+                    else
+                    {
+                        $keyValues += "::" + $value[$key]
+                    }
                 }
-            }
 
-            Write-Debug "${debugPrefix}        Canonicalized property '$key' = '$($value[$key])'"
-
-            if ($keywordData.Properties[$key].IsKey)
-            {
-                if($null -eq $value[$key])
+                # see if ValueMap is also defined for this property (actual values)
+                $allowedValueMap = $keywordData.Properties[$key].ValueMap
+                #if it is and the ValueMap contains the user-provided value as a key, use the actual value
+                if ($allowedValueMap -and $allowedValueMap.ContainsKey($value[$key]))
                 {
-                    $keyValues += "::__NULL__"
+                    $canonicalizedValue[$key] = $allowedValueMap[$value[$key]]
                 }
                 else
                 {
-                    $keyValues += "::" + $value[$key]
+                    $canonicalizedValue[$key] = $value[$key]
                 }
             }
-
-            # see if ValueMap is also defined for this property (actual values)
-            $allowedValueMap = $keywordData.Properties[$key].ValueMap
-            #if it is and the ValueMap contains the user-provided value as a key, use the actual value
-            if ($allowedValueMap -and $allowedValueMap.ContainsKey($value[$key]))
+            elseif ($keywordData.Properties[$key].Mandatory)
             {
-                $canonicalizedValue[$key] = $allowedValueMap[$value[$key]]
+                # If the property was mandatory but the user didn't provide a value, write and error.
+                Write-Error -ErrorRecord ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::MissingValueForMandatoryPropertyErrorRecord($keywordData.Keyword, $keywordData.Properties[$key].TypeConstraint, $Key))
+                Update-ConfigurationErrorCount
             }
-            else
-            {
-                $canonicalizedValue[$key] = $value[$key]
-            }
-        }
-        elseif ($keywordData.Properties[$key].Mandatory)
-        {
-            # If the property was mandatory but the user didn't provide a value, write and error.
-            Write-Error -ErrorRecord ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::MissingValueForMandatoryPropertyErrorRecord($keywordData.Keyword, $keywordData.Properties[$key].TypeConstraint, $Key))
-            Update-ConfigurationErrorCount
-        }
 
-        Write-Debug "${debugPrefix}    Processing completed '$key' ]"
+            Write-Debug "${debugPrefix}    Processing completed '$key' ]"
+        }
     }
 
     if($keyValues)

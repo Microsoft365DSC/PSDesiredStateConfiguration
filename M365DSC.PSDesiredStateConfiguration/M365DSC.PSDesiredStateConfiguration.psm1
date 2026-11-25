@@ -86,6 +86,7 @@ $script:DirectAccessMetaConfigPropertyList = @('AllowModuleOverWrite', 'Certific
 $script:ConfigurationNestingStack = New-Object -TypeName 'System.Collections.Generic.List[string]'
 $script:CimKeywordImplementationFunction = $null
 $script:MofTypeConstraintMap = @{}
+$script:FastPropertyWriting = $true
 $script:FastHostActive = $false
 $script:FastHostValidateMof = $false
 $script:FastHostKeywords = $null
@@ -519,7 +520,15 @@ function ConvertTo-MOFInstance
         $script:PsDscCompatibleVersion = "2.0.0"
     }
     # Look up the keyword definition; fast-host keywords take precedence over the parser table.
-    $keywordDefinition = Get-FastHostKeyword -Name $Type
+    $keywordDefinition = $null
+    if ($null -ne $script:FastHostKeywords)
+    {
+        $keywordDefinition = $script:FastHostKeywords[$Type]
+    }
+    if ($null -eq $keywordDefinition)
+    {
+        $keywordDefinition = Get-FastHostKeyword -Name $Type
+    }
     if ($null -eq $keywordDefinition)
     {
         $keywordDefinition = [System.Management.Automation.Language.DynamicKeyword]::GetKeyword($Type)
@@ -571,12 +580,24 @@ function ConvertTo-MOFInstance
         }
     }
 
+    $writtenProperties = $null
+    if ($script:FastPropertyWriting -and $DebugPreference -eq 'SilentlyContinue' -and $Type -notmatch 'MSFT_Credential' -and
+        $PropertyTypes -is [System.Collections.Generic.IDictionary[string, System.Management.Automation.Language.DynamicKeywordProperty]] -and
+        $InstanceAliases -is [System.Collections.IDictionary])
+    {
+        $writtenProperties = [M365DSC.PSDesiredStateConfiguration.MofPropertyWriter]::WriteProperties($Properties, $PropertyTypes, $InstanceAliases)
+    }
+
     # generate the property definitions
     $oldOFS = $OFS
     $OFS = ' '
     $result += try
     {
-        if ($Properties -and $Properties.Count)
+        if ($null -ne $writtenProperties)
+        {
+            $writtenProperties
+        }
+        elseif ($Properties -and $Properties.Count)
         {
             foreach ($p in (Get-DictionaryEntrySortedByKey -Dictionary $Properties))
             {
@@ -4891,6 +4912,11 @@ New-Alias -Name 'gcfgs' -Value 'Get-DscConfigurationStatus'
 
 . "$PSScriptRoot\SchemaCache.ps1"
 . "$PSScriptRoot\FastHost.ps1"
+
+if (-not ('M365DSC.PSDesiredStateConfiguration.MofPropertyWriter' -as [type]))
+{
+    Add-Type -Path "$PSScriptRoot\MofPropertyWriter.cs"
+}
 
 # The engine compiles every configuration body into a call to the module-qualified
 # name 'PSDesiredStateConfiguration\Configuration' and resolves it by name at

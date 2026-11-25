@@ -806,6 +806,146 @@ Configuration FreshCacheCfg
     }
 }
 
+Describe 'ConvertTo-DscFastCompileText' {
+    It 'returns the text a prepared compile turns into the MOF of a direct compile' {
+        $text = @'
+Configuration PreparedParityCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        xTestClassResource r1
+        {
+            Name = 'r1'
+            Value = 'v1'
+            Ensure = 'Present'
+            sArray = @('a', 'b')
+            EmbClassObj = EmbClass { EmbClassStr1 = 'emb1' }
+        }
+    }
+}
+'@
+        $prepared = ConvertTo-DscFastCompileText -ScriptText $text
+        $prepared.Supported | Should -Be $true
+        $prepared.Text | Should -Not -Match 'Import-DscResource'
+        @($prepared.ConfigurationNames) | Should -Be @('PreparedParityCfg')
+        $prepared.KeywordNames | Should -Contain 'xTestClassResource'
+
+        $fromPrepared = Invoke-DscFastCompile -Prepared $prepared -OutputPath (Join-Path $TestDrive 'prepared')
+        $direct = Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'prepared-direct')
+
+        $difference = Compare-Object -ReferenceObject @(Get-PSDscNormalizedMofLine -Path $direct.FullName) -DifferenceObject @(Get-PSDscNormalizedMofLine -Path $fromPrepared.FullName)
+        @($difference).Count | Should -Be 0
+    }
+
+    It 'reports an unsupported Import-DscResource form, and the prepared compile throws with -NoFallback' {
+        $text = @'
+Configuration PreparedUnsupportedCfg
+{
+    Import-DscResource -ModuleName $moduleName
+    ResourceForTests1 a
+    {
+        Prop1 = 'x'
+    }
+}
+'@
+        $prepared = ConvertTo-DscFastCompileText -ScriptText $text
+        $prepared.Supported | Should -Be $false
+        $prepared.Reason | Should -Match 'Unsupported Import-DscResource form'
+        { Invoke-DscFastCompile -Prepared $prepared -NoFallback -OutputPath (Join-Path $TestDrive 'prepared-unsupported') } |
+            Should -Throw '*Fast compilation is not possible*'
+    }
+
+    It 'refuses a -Prepared argument that ConvertTo-DscFastCompileText did not produce' {
+        { Invoke-DscFastCompile -Prepared ([PSCustomObject]@{ Text = 'Configuration X {}' }) -OutputPath (Join-Path $TestDrive 'prepared-foreign') } |
+            Should -Throw '*not a result of ConvertTo-DscFastCompileText*'
+    }
+}
+
+Describe 'Fast property writing' {
+    AfterEach {
+        Invoke-PSDscInEngineScope { $script:FastPropertyWriting = $true }
+    }
+
+    It 'writes the same MOF as the PowerShell path for every property type' {
+        $text = @'
+Configuration PropertyWritingCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        xTestClassResource r1
+        {
+            Name = 'r1'
+            Value = "quote "" backslash \ line`r`nbreak"
+            Settings = 5
+            Ensure = 'Present'
+            sArray = @('a', 'b')
+            EmbClassObj = EmbClass { EmbClassStr1 = 'emb1' }
+            EmbClassObjArray = @(EmbClass { EmbClassStr1 = 'e1' }; EmbClass { EmbClassStr1 = 'e2' })
+            bValue = $true
+            uInt8Value = 8
+            sInt8Value = -8
+            uInt16Value = 16
+            sInt16Value = -16
+            uInt32Value = 32
+            sInt32Value = -32
+            uInt64Value = 64
+        }
+        xTestClassResource r3
+        {
+            Name = 'r3'
+            Value = 'v3'
+            dateTimeVal = [DateTime]'2026-01-02T03:04:05'
+            HashTableValue = @{ k1 = 'v1' }
+        }
+        xTestClassResource r2
+        {
+            Name = 'r2'
+            Value = 'v2'
+            bValue = 0
+            sArray = 'single'
+            DependsOn = '[xTestClassResource]r1'
+        }
+    }
+}
+'@
+        $fast = Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'writing-fast')
+        Invoke-PSDscInEngineScope { $script:FastPropertyWriting = $false }
+        $powerShell = Invoke-DscFastCompile -ScriptText $text -OutputPath (Join-Path $TestDrive 'writing-powershell')
+
+        $difference = Compare-Object -ReferenceObject @(Get-PSDscNormalizedMofLine -Path $powerShell.FullName) -DifferenceObject @(Get-PSDscNormalizedMofLine -Path $fast.FullName)
+        @($difference).Count | Should -Be 0
+    }
+
+    It 'leaves value types it does not write to the PowerShell path' {
+        Invoke-PSDscInEngineScope {
+            $aliases = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,string]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+            $types = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,System.Management.Automation.Language.DynamicKeywordProperty]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+            foreach ($entry in @(@('When', 'DateTime'), @('Ratio', 'Real64'), @('Letter', 'Char16'), @('Flag', 'Boolean'), @('Name', 'String')))
+            {
+                $property = [System.Management.Automation.Language.DynamicKeywordProperty]::new()
+                $property.Name = $entry[0]
+                $property.TypeConstraint = $entry[1]
+                $types[$entry[0]] = $property
+            }
+
+            foreach ($properties in @(
+                @{ When = [DateTime]::Now }
+                @{ Ratio = 1.5 }
+                @{ Letter = 'a' }
+                @{ Flag = 'yes' }
+                @{ Name = 1.5 }
+                @{ Name = @{ k = 'v' } }
+                @{ Name = { 'script' } }
+                @{ Name = [PSCredential]::new('user', (ConvertTo-SecureString -String 'p' -AsPlainText -Force)) }))
+            {
+                [M365DSC.PSDesiredStateConfiguration.MofPropertyWriter]::WriteProperties($properties, $types, $aliases) | Should -BeNullOrEmpty
+            }
+        }
+    }
+}
+
 Describe 'Fast host resource adapter' {
     It 'reports a resource keyword that the schema cache does not know' {
         $text = @'
