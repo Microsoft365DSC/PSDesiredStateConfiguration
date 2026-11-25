@@ -22,8 +22,8 @@ public static class ResourceValueCopier
     /// <param name="canonical">The dictionary that receives the copied values under their schema property names.</param>
     /// <returns>
     /// The values of the key properties, each prefixed with <c>::</c> and <c>::__NULL__</c> for a null key,
-    /// in the order of the keyword properties. <see langword="null"/> when any argument is null, a
-    /// mandatory property is missing, a property has a range, a value is outside the allowed values, a key
+    /// in the order of the keyword properties. <see langword="null"/> when any argument is null, the
+    /// instance sets a property the schema lacks, a mandatory property is missing, a property has a range, a value is outside the allowed values, a key
     /// value is not a string, or a value of a mapped property is not a string. The PowerShell path then
     /// handles the instance and reports the error.
     /// </returns>
@@ -32,6 +32,14 @@ public static class ResourceValueCopier
         if (value is null || keyword is null || canonical is null)
         {
             return null;
+        }
+
+        foreach (object? name in value.Keys)
+        {
+            if (name is not string text || !keyword.Properties.ContainsKey(text))
+            {
+                return null;
+            }
         }
 
         var copied = new Dictionary<string, object?>(StringComparer.Ordinal);
