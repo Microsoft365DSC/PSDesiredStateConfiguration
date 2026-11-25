@@ -9,7 +9,7 @@
     RootModule = 'M365DSC.PSDesiredStateConfiguration.psm1'
 
     # Version number of this module.
-    ModuleVersion = '3.1.11'
+    ModuleVersion = '3.1.12'
 
     # Supported PSEditions
     CompatiblePSEditions = @('Desktop', 'Core')
