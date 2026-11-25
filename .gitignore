@@ -3,3 +3,7 @@
 TestResults/
 CodeCov.xml
 .claude/
+.vs/
+M365DSC.PSDesiredStateConfiguration/bin/
+src/**/bin/
+src/**/obj/

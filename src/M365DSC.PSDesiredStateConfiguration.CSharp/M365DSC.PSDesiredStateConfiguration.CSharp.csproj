@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <AssemblyName>M365DSC.PSDesiredStateConfiguration.CSharp</AssemblyName>
+    <RootNamespace>M365DSC.PSDesiredStateConfiguration</RootNamespace>
+    <Description>MOF property writing and resource value copying for the M365DSC.PSDesiredStateConfiguration compiler.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="PowerShellStandard.Library" PrivateAssets="All" />
+  </ItemGroup>
+
+</Project>

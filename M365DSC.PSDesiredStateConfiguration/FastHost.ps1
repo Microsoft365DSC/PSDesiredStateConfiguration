@@ -8,7 +8,15 @@ if ($__fhKeywordName.Contains('\'))
 {
     $__fhKeywordName = $__fhKeywordName.Substring($__fhKeywordName.LastIndexOf('\') + 1)
 }
-$__fhKeyword = Get-FastHostKeyword -Name $__fhKeywordName
+$__fhKeyword = $null
+if ($null -ne $script:FastHostKeywords -and $__fhKeywordName)
+{
+    $__fhKeyword = $script:FastHostKeywords[$__fhKeywordName]
+}
+if ($null -eq $__fhKeyword)
+{
+    $__fhKeyword = Get-FastHostKeyword -Name $__fhKeywordName
+}
 if ($null -eq $__fhKeyword)
 {
     throw "The DSC resource '$__fhKeywordName' is not present in the schema cache."
@@ -103,6 +111,7 @@ function Get-FastHostKeywordName
             $null = $names.Add($key)
         }
     }
+
     if ($script:FastHostKeywordSource)
     {
         foreach ($cache in $script:FastHostKeywordSource)
@@ -147,10 +156,12 @@ function Register-DscSchemaCache
     {
         $script:FastHostKeywords = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,System.Management.Automation.Language.DynamicKeyword]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
     }
+
     if ($null -eq $script:FastHostAdapters)
     {
         $script:FastHostAdapters = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,scriptblock]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
     }
+
     if ($null -eq $script:FastHostKeywordSource)
     {
         $script:FastHostKeywordSource = New-Object -TypeName 'System.Collections.Generic.List[System.Object]'
@@ -397,6 +408,7 @@ function ConvertTo-FastHostCompileText
                 {
                     $edits.Add([PSCustomObject]@{ Start = $gapStart; Length = $gapLength; Text = ' ' })
                 }
+
                 if ($Convert -and $expression.Expression -is [System.Management.Automation.Language.ScriptBlockExpressionAst])
                 {
                     $offset = $second.Extent.StartOffset
@@ -685,10 +697,12 @@ function Resolve-FastHostModule
         {
             continue
         }
+
         if ($ModuleVersion -and $version -ne $ModuleVersion)
         {
             continue
         }
+
         if ($null -eq $best -or $version -gt $best.Version)
         {
             $best = [PSCustomObject]@{
@@ -721,6 +735,165 @@ function Get-DscFastCompileTiming
 }
 Export-ModuleMember -Function Get-DscFastCompileTiming
 
+function New-FastHostCompilation
+{
+    [OutputType([System.Management.Automation.PSCustomObject])]
+    param (
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [System.String]
+        $Text,
+
+        [System.String]
+        $Path,
+
+        [System.String[]]
+        $SchemaCachePath,
+
+        [switch]
+        $Force,
+
+        [Parameter(Mandatory)]
+        [System.Collections.Specialized.OrderedDictionary]
+        $Timing
+    )
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+    Assert-DscConfigurationShim
+
+    $compilation = [PSCustomObject]@{
+        Supported          = $false
+        Reason             = $null
+        MissingCacheModule = $null
+        Text               = $null
+        SourceText         = $Text
+        Path               = $Path
+        ConfigurationNames = @()
+        KeywordNames       = @()
+    }
+
+    $stripResult = Get-StrippedConfigurationText -Text $Text
+    $compilation.ConfigurationNames = $stripResult.ConfigurationNames
+    if (-not $stripResult.Supported)
+    {
+        $compilation.Reason = $stripResult.Reason
+    }
+    $Timing['parse'] = $stopwatch.ElapsedMilliseconds
+    $stopwatch.Restart()
+
+    $resolvedModules = @()
+    if (-not $compilation.Reason)
+    {
+        foreach ($spec in $stripResult.ModuleSpecs)
+        {
+            $specKey = "$($spec.ModuleName)|$($spec.ModuleVersion)"
+            $module = $script:FastHostResolvedModules[$specKey]
+            if ($null -eq $module)
+            {
+                $module = Resolve-FastHostModule -ModuleName $spec.ModuleName -ModuleVersion $spec.ModuleVersion
+                if ($null -ne $module)
+                {
+                    $script:FastHostResolvedModules[$specKey] = $module
+                }
+            }
+
+            if (-not $module)
+            {
+                $compilation.Reason = "Module '$($spec.ModuleName)' $(if ($spec.ModuleVersion) { "version $($spec.ModuleVersion) " })was not found."
+                break
+            }
+            $dscResourcesPath = Join-Path $module.ModuleBase 'DscResources'
+            if (Test-Path $dscResourcesPath)
+            {
+                $compositeFiles = @([System.IO.Directory]::EnumerateFiles($dscResourcesPath, '*.schema.psm1', [System.IO.SearchOption]::AllDirectories))
+                if ($compositeFiles.Count -gt 0)
+                {
+                    $compilation.Reason = "Module '$($module.Name)' contains composite resources, which the fast host does not support yet."
+                    break
+                }
+            }
+            $resolvedModules += $module
+        }
+    }
+    $Timing['resolve'] = $stopwatch.ElapsedMilliseconds
+    $stopwatch.Restart()
+
+    if ($compilation.Reason)
+    {
+        return $compilation
+    }
+
+    foreach ($module in $resolvedModules)
+    {
+        $moduleState = '{0}|{1}' -f $module.Version.ToString(), (Get-DscModuleFingerprint -Module $module)
+        $registered = $script:FastHostRegisteredModules[$module.Name]
+        if ($registered -and $registered -eq $moduleState -and -not $Force)
+        {
+            continue
+        }
+        $cache = $null
+        if (-not $Force)
+        {
+            $cache = Get-DscSchemaCache -Module $module -SchemaCachePath $SchemaCachePath
+        }
+
+        if (-not $cache)
+        {
+            $cache = New-DscSchemaCacheForModule -Module $module
+        }
+        if (-not $cache)
+        {
+            $compilation.MissingCacheModule = $module
+            return $compilation
+        }
+        Register-DscSchemaCache -Cache $cache
+        $script:FastHostRegisteredModules[$module.Name] = $moduleState
+    }
+    $Timing['cache'] = $stopwatch.ElapsedMilliseconds
+    $stopwatch.Restart()
+
+    $keywordNames = Get-FastHostKeywordName
+    $compilation.KeywordNames = @($keywordNames)
+    $compilation.Text = ConvertTo-FastHostCompileText -Text $Text -Ast $stripResult.Ast -ImportStatement $stripResult.ImportStatements -KeywordNames $keywordNames -Merge -Convert
+    $compilation.Supported = $true
+    $Timing['rewrite'] = $stopwatch.ElapsedMilliseconds
+
+    $compilation
+}
+
+function ConvertTo-DscFastCompileText
+{
+    [CmdletBinding(DefaultParameterSetName = 'Path')]
+    [OutputType([System.Management.Automation.PSCustomObject])]
+    param (
+        [Parameter(Mandatory, ParameterSetName = 'Path', Position = 0)]
+        [System.String]
+        $Path,
+
+        [Parameter(Mandatory, ParameterSetName = 'Text')]
+        [System.String]
+        $ScriptText,
+
+        [System.String[]]
+        $SchemaCachePath,
+
+        [switch]
+        $Force
+    )
+
+    if ($PSCmdlet.ParameterSetName -eq 'Path')
+    {
+        $Path = (Resolve-Path -Path $Path).ProviderPath
+        $ScriptText = [System.IO.File]::ReadAllText($Path)
+    }
+
+    $timing = [ordered]@{}
+    $script:FastHostTiming = $timing
+    New-FastHostCompilation -Text $ScriptText -Path $Path -SchemaCachePath $SchemaCachePath -Force:$Force -Timing $timing
+}
+Export-ModuleMember -Function ConvertTo-DscFastCompileText
+
 function Invoke-DscFastCompile
 {
     [CmdletBinding(DefaultParameterSetName = 'Path')]
@@ -732,6 +905,10 @@ function Invoke-DscFastCompile
         [Parameter(Mandatory, ParameterSetName = 'Text')]
         [System.String]
         $ScriptText,
+
+        [Parameter(Mandatory, ParameterSetName = 'Prepared')]
+        [System.Management.Automation.PSObject]
+        $Prepared,
 
         [System.String]
         $ConfigurationName,
@@ -745,9 +922,13 @@ function Invoke-DscFastCompile
         [System.String]
         $OutputPath,
 
+        [Parameter(ParameterSetName = 'Path')]
+        [Parameter(ParameterSetName = 'Text')]
         [System.String[]]
         $SchemaCachePath,
 
+        [Parameter(ParameterSetName = 'Path')]
+        [Parameter(ParameterSetName = 'Text')]
         [switch]
         $Force,
 
@@ -766,110 +947,51 @@ function Invoke-DscFastCompile
 
     $timing = [ordered]@{}
     $script:FastHostTiming = $timing
-    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $total = [System.Diagnostics.Stopwatch]::StartNew()
 
-    Assert-DscConfigurationShim
-
-    $fallbackReason = $null
-    $stripResult = Get-StrippedConfigurationText -Text $ScriptText
-    if (-not $stripResult.Supported)
+    if ($PSCmdlet.ParameterSetName -eq 'Prepared')
     {
-        $fallbackReason = $stripResult.Reason
-    }
-    $timing['parse'] = $stopwatch.ElapsedMilliseconds
-    $stopwatch.Restart()
-
-    $resolvedModules = @()
-    if (-not $fallbackReason)
-    {
-        foreach ($spec in $stripResult.ModuleSpecs)
+        if (-not ($Prepared.Supported -or $Prepared.Reason -or $Prepared.MissingCacheModule))
         {
-            $specKey = "$($spec.ModuleName)|$($spec.ModuleVersion)"
-            $module = $script:FastHostResolvedModules[$specKey]
-            if ($null -eq $module)
-            {
-                $module = Resolve-FastHostModule -ModuleName $spec.ModuleName -ModuleVersion $spec.ModuleVersion
-                if ($null -ne $module)
-                {
-                    $script:FastHostResolvedModules[$specKey] = $module
-                }
-            }
-
-            if (-not $module)
-            {
-                $fallbackReason = "Module '$($spec.ModuleName)' $(if ($spec.ModuleVersion) { "version $($spec.ModuleVersion) " })was not found."
-                break
-            }
-            $dscResourcesPath = Join-Path $module.ModuleBase 'DscResources'
-            if (Test-Path $dscResourcesPath)
-            {
-                $compositeFiles = @([System.IO.Directory]::EnumerateFiles($dscResourcesPath, '*.schema.psm1', [System.IO.SearchOption]::AllDirectories))
-                if ($compositeFiles.Count -gt 0)
-                {
-                    $fallbackReason = "Module '$($module.Name)' contains composite resources, which the fast host does not support yet."
-                    break
-                }
-            }
-            $resolvedModules += $module
+            throw 'The -Prepared argument is not a result of ConvertTo-DscFastCompileText.'
         }
+        Assert-DscConfigurationShim
+        $compilation = $Prepared
+        $Path = $Prepared.Path
     }
-    $timing['resolve'] = $stopwatch.ElapsedMilliseconds
-    $stopwatch.Restart()
+    else
+    {
+        $compilation = New-FastHostCompilation -Text $ScriptText -Path $Path -SchemaCachePath $SchemaCachePath -Force:$Force -Timing $timing
+    }
 
-    if ($fallbackReason)
+    if ($compilation.Reason)
     {
         if ($NoFallback)
         {
-            throw "Fast compilation is not possible: $fallbackReason"
+            throw "Fast compilation is not possible: $($compilation.Reason)"
         }
-        Write-Warning -Message "Falling back to standard compilation: $fallbackReason"
-        return Invoke-DscFastCompileBody -Text $ScriptText -ConfigurationName $ConfigurationName -Parameters $Parameters -ConfigurationData $ConfigurationData -OutputPath $OutputPath -ScriptPath $Path -ConfigurationNames $stripResult.ConfigurationNames
+        Write-Warning -Message "Falling back to standard compilation: $($compilation.Reason)"
+        return Invoke-DscFastCompileBody -Text $compilation.SourceText -ConfigurationName $ConfigurationName -Parameters $Parameters -ConfigurationData $ConfigurationData -OutputPath $OutputPath -ScriptPath $Path -ConfigurationNames $compilation.ConfigurationNames
     }
 
-    foreach ($module in $resolvedModules)
+    if ($null -ne $compilation.MissingCacheModule)
     {
-        $moduleState = '{0}|{1}' -f $module.Version.ToString(), (Get-DscModuleFingerprint -Module $module)
-        $registered = $script:FastHostRegisteredModules[$module.Name]
-        if ($registered -and $registered -eq $moduleState -and -not $Force)
+        $module = $compilation.MissingCacheModule
+        if ($NoFallback)
         {
-            continue
+            throw "No schema cache could be obtained for module '$($module.Name)' $($module.Version)."
         }
-        $cache = $null
-        if (-not $Force)
-        {
-            $cache = Get-DscSchemaCache -Module $module -SchemaCachePath $SchemaCachePath
-        }
-        if (-not $cache)
-        {
-            $cache = New-DscSchemaCacheForModule -Module $module
-        }
-        if (-not $cache)
-        {
-            if ($NoFallback)
-            {
-                throw "No schema cache could be obtained for module '$($module.Name)' $($module.Version)."
-            }
-            Write-Warning -Message "Falling back to standard compilation: no usable schema cache for module '$($module.Name)' $($module.Version)."
-            return Invoke-DscFastCompileBody -Text $ScriptText -ConfigurationName $ConfigurationName -Parameters $Parameters -ConfigurationData $ConfigurationData -OutputPath $OutputPath -ScriptPath $Path -ConfigurationNames $stripResult.ConfigurationNames
-        }
-        Register-DscSchemaCache -Cache $cache
-        $script:FastHostRegisteredModules[$module.Name] = $moduleState
+        Write-Warning -Message "Falling back to standard compilation: no usable schema cache for module '$($module.Name)' $($module.Version)."
+        return Invoke-DscFastCompileBody -Text $compilation.SourceText -ConfigurationName $ConfigurationName -Parameters $Parameters -ConfigurationData $ConfigurationData -OutputPath $OutputPath -ScriptPath $Path -ConfigurationNames $compilation.ConfigurationNames
     }
-    $timing['cache'] = $stopwatch.ElapsedMilliseconds
-    $stopwatch.Restart()
 
-    $keywordNames = Get-FastHostKeywordName
-    $compileText = ConvertTo-FastHostCompileText -Text $ScriptText -Ast $stripResult.Ast -ImportStatement $stripResult.ImportStatements -KeywordNames $keywordNames -Merge -Convert
-    $timing['rewrite'] = $stopwatch.ElapsedMilliseconds
-    $stopwatch.Restart()
-
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $script:FastHostActive = $true
     $script:FastHostValidateMof = [bool]$ValidateMof
     $Global:PSDscFastCompileActive = $true
     try
     {
-        Invoke-DscFastCompileBody -Text $compileText -ConfigurationName $ConfigurationName -Parameters $Parameters -ConfigurationData $ConfigurationData -OutputPath $OutputPath -ScriptPath $Path -ConfigurationNames $stripResult.ConfigurationNames
+        Invoke-DscFastCompileBody -Text $compilation.Text -ConfigurationName $ConfigurationName -Parameters $Parameters -ConfigurationData $ConfigurationData -OutputPath $OutputPath -ScriptPath $Path -ConfigurationNames $compilation.ConfigurationNames
     }
     finally
     {
@@ -948,10 +1070,12 @@ function Invoke-DscFastCompileBody
         {
             $invokeArguments = $Parameters.Clone()
         }
+
         if ($null -ne $ConfigurationData)
         {
             $invokeArguments['ConfigurationData'] = $ConfigurationData
         }
+
         if ($OutputPath)
         {
             $invokeArguments['OutputPath'] = $OutputPath

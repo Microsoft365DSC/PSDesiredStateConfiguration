@@ -650,12 +650,13 @@ every document goes through a single writer rather than through redirection.
 | `docs/` | This document and the fast host contract |
 | `test/` | Pester suites plus `TestModules`, small resource modules covering class based, script based, composite, credential, ambiguous name and state scenarios |
 | `tools/benchmarks/` | Compile benchmark, MOF comparison and benchmark configuration generator, with a checked in `baseline.json` |
-| `Utilities/Build.ps1` | Validation and test entry point |
+| `src/M365DSC.PSDesiredStateConfiguration.CSharp/` | The netstandard2.0 assembly with the MOF property writer and the resource value copier |
+| `Utilities/Build.ps1` | Build, validation and test entry point |
 
-`Build.ps1` compiles nothing, because the module is pure script and is published from its folder as
-it stands. What it does is keep that folder publishable. It syncs the bundled compatibility module to
-the engine version, validates both manifests, verifies that the module imports and exports what the
-manifest promises, and with `-Test` runs the Pester suites on both editions.
+`Build.ps1` keeps the module folder publishable. It builds the assembly at the module version into the
+module's `bin` folder, syncs the bundled compatibility module to the engine version, validates both
+manifests, verifies that the module imports, loads its assembly and exports what the manifest
+promises, and with `-Test` runs the Pester suites on both editions.
 
 `Invoke-DscCompileBenchmark.ps1` measures compile time across editions, compile paths (the built in
 module, the fork's standard path, the fork's fast host) and cache states. Every sample runs in a fresh

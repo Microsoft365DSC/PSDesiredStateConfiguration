@@ -14,6 +14,7 @@ The fork is rebased onto the upstream v2.0.7 pure-script lineage, with a couple 
   UTF-16LE with BOM (the encoding the DSC engine requires) on both editions.
 - A fast compilation host (`Invoke-DscFastCompile`) backed by a persistent JSON schema cache:
   fresh-process compiles between 5x and 10x faster than a default run.
+  `ConvertTo-DscFastCompileText` returns the exact text it compiles, for callers that inspect it first.
 - Upstream MOF emission fixes [#127](https://github.com/PowerShell/PSDesiredStateConfiguration/pull/127)
   and [#128](https://github.com/PowerShell/PSDesiredStateConfiguration/issues/128) retained.
 
@@ -104,11 +105,13 @@ A cache is used only when its format version, module name, version, and fingerpr
 
 ## Build
 
-The module is pure script and is published straight from the `M365DSC.PSDesiredStateConfiguration`
-folder, so there is nothing to compile. One script validates it:
+The module is published from the `M365DSC.PSDesiredStateConfiguration` folder. Its C# code lives in
+`src\M365DSC.PSDesiredStateConfiguration.CSharp`, a netstandard2.0 project that the build script
+compiles into the module's `bin` folder. The manifest loads that assembly through `RequiredAssemblies`
+on both editions. Building needs the .NET SDK named in `global.json`.
 
 ```powershell
-.\Utilities\Build.ps1          # sync the compatibility module version, validate manifests and exports
+.\Utilities\Build.ps1          # build the assembly, sync the compatibility module version, validate manifests and exports
 .\Utilities\Build.ps1 -Test    # the same, then run every Pester suite on both editions
 ```
 
@@ -122,7 +125,7 @@ Tests use **Pester 6**. The suites in `test\` are:
 - `ModuleNameClaim.Tests.ps1` - out-of-process check that an engine imported by path alone still owns
   the `PSDesiredStateConfiguration` name across repeated compiles
 
-Run them through the build script, or directly:
+Run them through the build script, or directly after one `Build.ps1` run:
 
 ```powershell
 $repo = 'C:\path\to\PSDesiredStateConfiguration'

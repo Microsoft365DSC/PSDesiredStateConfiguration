@@ -174,7 +174,8 @@ namespace Microsoft.PowerShell.DesiredStateConfiguration
 }
 "@
 
-if(-not ([System.Management.Automation.PSTypeName]'Microsoft.PowerShell.DesiredStateConfiguration.DscResourceInfo').Type) {
+if (-not ([System.Management.Automation.PSTypeName]'Microsoft.PowerShell.DesiredStateConfiguration.DscResourceInfo').Type)
+{
     Add-Type -TypeDefinition $AddDscResourceInfoTypeScript
 }
 

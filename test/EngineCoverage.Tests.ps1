@@ -34,6 +34,7 @@ Describe 'stringify edge cases' {
     It 'renders a script block that uses $using: variables from its defining module' {
         $probeModule = New-Module -Name 'ProbeStringifyModule' -ScriptBlock {
             $script:inner = 'module-value'
+
             function Get-ProbeScriptBlock { { $using:inner } }
         }
         $scriptBlock = & $probeModule { Get-ProbeScriptBlock }
@@ -56,6 +57,7 @@ Describe 'stringify edge cases' {
     It 'serializes non string $using: variables from the defining module' {
         $probeModule = New-Module -Name 'ProbeStringifyModuleInt' -ScriptBlock {
             $script:inner = 42
+
             function Get-ProbeScriptBlock { { $using:inner } }
         }
         $scriptBlock = & $probeModule { Get-ProbeScriptBlock }
@@ -712,6 +714,7 @@ Describe 'Coverage: CIM keyword implementation branches' {
             Export-DscSchemaCache -Module $module -OutputPath $real | Out-Null
             $lines = [System.Collections.Generic.List[System.String]]::new([System.String[]] [System.IO.File]::ReadAllLines($real))
             $cache = [PSCustomObject]@{ Lines = $lines; Header = (ConvertFrom-Json -InputObject $lines[0]) }
+
             function Add-PSDscFakeKeyword($cache, $keyword, $resourceName, $nameMode, $props) {
                 $properties = @{}
                 foreach ($p in $props) {
@@ -1100,6 +1103,7 @@ Describe 'Coverage: CIM keyword implementation via direct invocation' {
                     if ($kProps[$pn].valueMap) {
                         foreach ($vk in $kProps[$pn].valueMap.Keys) { $p.ValueMap[[System.String]$vk] = [System.String]$kProps[$pn].valueMap[$vk] }
                     }
+
                     if ($kProps[$pn].range) {
                         $r = $kProps[$pn].range
                         $p.Range = [System.Tuple]::Create([int]$r[0], [int]$r[1])
