@@ -4,7 +4,7 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <AssemblyName>M365DSC.PSDesiredStateConfiguration.CSharp</AssemblyName>
     <RootNamespace>M365DSC.PSDesiredStateConfiguration</RootNamespace>
-    <Description>MOF property writing and resource value copying for the M365DSC.PSDesiredStateConfiguration compiler.</Description>
+    <Description>DscResourceInfo types, MOF property writing, resource value copying and fast host text rewriting for the M365DSC.PSDesiredStateConfiguration compiler.</Description>
   </PropertyGroup>
 
   <ItemGroup>
