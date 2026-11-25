@@ -75,7 +75,6 @@ Set-StrictMode -Off
 # In case localized resource is not available we revert back to English as defined in LocalizedData section so ignore the error instead of showing it to user.
 Import-LocalizedData  -BindingVariable LocalizedData -FileName PSDesiredStateConfiguration.Resource.psd1 -ErrorAction Ignore
 
-Import-Module $PSScriptRoot/helpers/DscResourceInfo.psm1
 
 # Set DSC HOME environment variable.
 $env:DSC_HOME = "$PSScriptRoot/Configuration"

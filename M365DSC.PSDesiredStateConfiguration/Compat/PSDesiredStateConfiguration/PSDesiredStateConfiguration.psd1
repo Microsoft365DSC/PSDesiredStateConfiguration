@@ -6,7 +6,7 @@
 
     RootModule = 'PSDesiredStateConfiguration.psm1'
 
-    ModuleVersion = '3.1.11'
+    ModuleVersion = '3.1.12'
 
     CompatiblePSEditions = @('Desktop', 'Core')
 
