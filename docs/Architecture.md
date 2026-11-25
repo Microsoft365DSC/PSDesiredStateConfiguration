@@ -73,7 +73,7 @@ flowchart TB
             driver["CimKeywordImplementationFunction.ps1<br/><i>per resource keyword driver</i>"]
             fast["FastHost.ps1<br/><i>Invoke-DscFastCompile, stripping, adapters</i>"]
             cache["SchemaCache.ps1<br/><i>Export/Test/Get-DscSchemaCache</i>"]
-            helper["helpers/DscResourceInfo.psm1<br/><i>DscResourceInfo types</i>"]
+            assembly["bin/M365DSC.PSDesiredStateConfiguration.CSharp.dll<br/><i>DscResourceInfo types, MOF property writer</i>"]
             base["Configuration/BaseRegistration<br/><i>base MOF and MFL schemas</i>"]
             compat["Compat/PSDesiredStateConfiguration<br/><i>compatibility module, same version</i>"]
         end
@@ -613,8 +613,7 @@ standard path with the fast host, whose `SourceInfo` line numbers differ.
 **`Get-DscResource`** loads the default keywords, works out which modules to look at, either the ones
 named by `-Module` or every module on `PSModulePath` that has a `DscResources` folder or a
 `DscResourcesToExport` entry in its manifest, and turns the resulting keywords and composite resource
-files into `DscResourceInfo` objects. Those types come from `helpers/DscResourceInfo.psm1`, which
-compiles a small C# source at import time. `-Syntax` renders the keyword as a usage block instead of
+files into `DscResourceInfo` objects. Those types come from the module's C# assembly in `bin`. `-Syntax` renders the keyword as a usage block instead of
 returning objects.
 
 **`Invoke-DscResource`** runs a single resource method outside a compile. It resolves the resource
