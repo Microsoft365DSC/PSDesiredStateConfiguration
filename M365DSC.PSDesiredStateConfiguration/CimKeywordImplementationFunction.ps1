@@ -285,6 +285,17 @@ $complexResourceQualifier = Get-ComplexResourceQualifier -IncludeCurrent
 
             Write-Debug "${debugPrefix}    Processing completed '$key' ]"
         }
+
+        foreach ($key in @($value.Keys | Where-Object -FilterScript { -not $keywordData.Properties.ContainsKey($_) }))
+        {
+            $members = @($keywordData.Properties.Keys | Sort-Object) -join "', '"
+            Write-Error -ErrorRecord ([System.Management.Automation.ErrorRecord]::new(
+                [System.ArgumentException]::new("The member '$key' is not valid. Valid members are '$members'."),
+                'InvalidInstanceProperty',
+                [System.Management.Automation.ErrorCategory]::InvalidArgument,
+                $key))
+            Update-ConfigurationErrorCount
+        }
     }
 
     if ($keyValues)
