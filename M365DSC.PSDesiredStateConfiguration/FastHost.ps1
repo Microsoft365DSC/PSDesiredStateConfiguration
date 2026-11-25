@@ -180,98 +180,6 @@ function Register-DscSchemaCache
     }
 }
 
-# Returns the keyword a next-line brace would belong to, or $null. There are two possible ways
-# for such a keyword to appear:
-#
-#   KeywordName [InstanceName]        - a resource statement
-#   PropertyName = KeywordName        - a nested CIM instance inside a resource body
-#
-# The second shape is not an assignment. It is inside a configuration body, and 'PropertyName' is a
-# bare word, so the parser produces one CommandAst whose elements are the property name,
-# a literal '=' and the keyword.
-function Get-FastHostMergeCandidateKeyword
-{
-    [OutputType([System.Object])]
-    param (
-        [Parameter(Mandatory)]
-        [System.Management.Automation.Language.StatementAst]
-        $Statement
-    )
-
-    $pipeline = $Statement -as [System.Management.Automation.Language.PipelineAst]
-    if ($null -eq $pipeline)
-    {
-        $assignment = $Statement -as [System.Management.Automation.Language.AssignmentStatementAst]
-        if ($null -eq $assignment)
-        {
-            return $null
-        }
-
-        $pipeline = $assignment.Right -as [System.Management.Automation.Language.PipelineAst]
-    }
-
-    if ($null -eq $pipeline -or $pipeline.PipelineElements.Count -ne 1)
-    {
-        return $null
-    }
-
-    $command = $pipeline.PipelineElements[0] -as [System.Management.Automation.Language.CommandAst]
-    if ($null -eq $command)
-    {
-        return $null
-    }
-
-    $elements = $command.CommandElements
-    if ($elements.Count -le 2)
-    {
-        return [PSCustomObject]@{
-            Name      = $command.GetCommandName()
-            EndOffset = $command.Extent.EndOffset
-        }
-    }
-
-    # 'PropertyName = KeywordName [InstanceName]'
-    if ($elements.Count -le 4 -and $elements[1].Extent.Text -eq '=')
-    {
-        $keywordElement = $elements[2] -as [System.Management.Automation.Language.StringConstantExpressionAst]
-        if ($null -eq $keywordElement)
-        {
-            return $null
-        }
-
-        return [PSCustomObject]@{
-            Name      = $keywordElement.Value
-            EndOffset = $command.Extent.EndOffset
-        }
-    }
-
-    return $null
-}
-
-function Get-FastHostBodyKeywordName
-{
-    [OutputType([System.String])]
-    param (
-        [Parameter(Mandatory)]
-        [System.Management.Automation.Language.CommandAst]
-        $Command
-    )
-
-    $elements = $Command.CommandElements
-    if ($elements.Count -ge 3 -and $elements[1].Extent.Text -eq '=')
-    {
-        $keyword = $elements[2] -as [System.Management.Automation.Language.StringConstantExpressionAst]
-        if ($null -eq $keyword)
-        {
-            return $null
-        }
-
-        return $keyword.Value
-    }
-
-    return $Command.GetCommandName()
-}
-
 # A parsed configuration statement imports its resource modules. Masking the word keeps the
 # parser away from that, and the same-length replacement keeps every extent offset valid for
 # the original text.
@@ -288,42 +196,6 @@ function Get-FastHostMaskedAst
     $tokens = $null
     $parseErrors = $null
     [System.Management.Automation.Language.Parser]::ParseInput($masked, [ref]$tokens, [ref]$parseErrors)
-}
-
-function Invoke-FastHostTextEdit
-{
-    [OutputType([System.String])]
-    param (
-        [Parameter(Mandatory)]
-        [AllowEmptyString()]
-        [System.String]
-        $Text,
-
-        [Parameter(Mandatory)]
-        [AllowEmptyCollection()]
-        $Edit
-    )
-
-    if ($Edit.Count -eq 0)
-    {
-        return $Text
-    }
-
-    $ordered = @($Edit | Sort-Object -Property Start, Length)
-    $builder = New-Object -TypeName System.Text.StringBuilder -ArgumentList ($Text.Length + $ordered.Count * 2)
-    $position = 0
-    foreach ($item in $ordered)
-    {
-        if ($item.Start -lt $position)
-        {
-            throw "Overlapping text edits at offset $($item.Start)."
-        }
-        $null = $builder.Append($Text.Substring($position, $item.Start - $position))
-        $null = $builder.Append($item.Text)
-        $position = $item.Start + $item.Length
-    }
-    $null = $builder.Append($Text.Substring($position))
-    $builder.ToString()
 }
 
 function ConvertTo-FastHostCompileText
@@ -355,103 +227,8 @@ function ConvertTo-FastHostCompileText
         $Ast = Get-FastHostMaskedAst -Text $Text
     }
 
-    $names = $KeywordNames -as [System.Collections.Generic.HashSet[System.String]]
-    if ($null -eq $names)
-    {
-        $names = New-Object -TypeName 'System.Collections.Generic.HashSet[System.String]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
-        foreach ($name in @($KeywordNames)) { $null = $names.Add([System.String]$name) }
-    }
-
-    $edits = New-Object -TypeName 'System.Collections.Generic.List[System.Object]'
-    foreach ($statement in @($ImportStatement))
-    {
-        $edits.Add([PSCustomObject]@{ Start = $statement.Extent.StartOffset; Length = $statement.Extent.EndOffset - $statement.Extent.StartOffset; Text = '' })
-    }
-
-    if ($names.Count -eq 0 -or -not ($Merge -or $Convert))
-    {
-        return Invoke-FastHostTextEdit -Text $Text -Edit $edits
-    }
-
-    $bodyStarts = New-Object -TypeName 'System.Collections.Generic.HashSet[int]'
-
-    # With the keyword unknown to the parser, a next-line brace parses as a separate scriptblock
-    # statement and the engine rejects the resource as undefined.
-    if ($Merge)
-    {
-        $blocks = $Ast.FindAll({ $args[0] -is [System.Management.Automation.Language.StatementBlockAst] -or $args[0] -is [System.Management.Automation.Language.NamedBlockAst] }, $true)
-        foreach ($block in $blocks)
-        {
-            $statements = $block.Statements
-            for ($i = 0; $i -lt $statements.Count - 1; $i++)
-            {
-                $candidate = Get-FastHostMergeCandidateKeyword -Statement $statements[$i]
-                if ($null -eq $candidate -or -not $candidate.Name -or -not $names.Contains($candidate.Name))
-                {
-                    continue
-                }
-                $second = $statements[$i + 1]
-                if ($second -isnot [System.Management.Automation.Language.PipelineAst] -or $second.PipelineElements.Count -ne 1)
-                {
-                    continue
-                }
-                $expression = $second.PipelineElements[0] -as [System.Management.Automation.Language.CommandExpressionAst]
-                if ($null -eq $expression -or
-                    ($expression.Expression -isnot [System.Management.Automation.Language.ScriptBlockExpressionAst] -and
-                     $expression.Expression -isnot [System.Management.Automation.Language.HashtableAst]))
-                {
-                    continue
-                }
-                $gapStart = $candidate.EndOffset
-                $gapLength = $second.Extent.StartOffset - $gapStart
-                if ($gapLength -gt 0)
-                {
-                    $edits.Add([PSCustomObject]@{ Start = $gapStart; Length = $gapLength; Text = ' ' })
-                }
-
-                if ($Convert -and $expression.Expression -is [System.Management.Automation.Language.ScriptBlockExpressionAst])
-                {
-                    $offset = $second.Extent.StartOffset
-                    if ($bodyStarts.Add($offset))
-                    {
-                        $prefix = if ($gapLength -gt 0 -or ($offset -gt 0 -and [char]::IsWhiteSpace($Text[$offset - 1]))) { '@' } else { ' @' }
-                        $edits.Add([PSCustomObject]@{ Start = $offset; Length = 0; Text = $prefix })
-                    }
-                }
-            }
-        }
-    }
-
-    if ($Convert)
-    {
-        $commands = $Ast.FindAll({ $args[0] -is [System.Management.Automation.Language.CommandAst] }, $true)
-        foreach ($command in $commands)
-        {
-            $elements = $command.CommandElements
-            $body = $elements[$elements.Count - 1] -as [System.Management.Automation.Language.ScriptBlockExpressionAst]
-            if ($null -eq $body)
-            {
-                continue
-            }
-
-            $name = Get-FastHostBodyKeywordName -Command $command
-            if (-not $name -or -not $names.Contains($name))
-            {
-                continue
-            }
-
-            $offset = $body.Extent.StartOffset
-            if ($bodyStarts.Add($offset))
-            {
-                # 'MSFT_Type @{' parses, 'MSFT_Type@{' does not
-                # Keep a separator when the source had none
-                $prefix = if ($offset -gt 0 -and -not [char]::IsWhiteSpace($Text[$offset - 1])) { ' @' } else { '@' }
-                $edits.Add([PSCustomObject]@{ Start = $offset; Length = 0; Text = $prefix })
-            }
-        }
-    }
-
-    Invoke-FastHostTextEdit -Text $Text -Edit $edits
+    [M365DSC.PSDesiredStateConfiguration.FastHostTextRewriter]::Rewrite(
+        $Text, $Ast, [System.Management.Automation.Language.Ast[]]@($ImportStatement), [System.String[]]@($KeywordNames), $Merge.IsPresent, $Convert.IsPresent)
 }
 
 function Merge-FastHostResourceStatements
@@ -494,28 +271,9 @@ function Get-StrippedConfigurationText
 
     $ast = Get-FastHostMaskedAst -Text $Text
 
-    $configurationNames = @()
-    $importStatements = @()
-    $commands = $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.CommandAst] }, $true)
-    foreach ($command in $commands)
-    {
-        $commandName = $command.GetCommandName()
-        if ($commandName -eq 'C0nfiguration')
-        {
-            foreach ($element in $command.CommandElements)
-            {
-                if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $element.Value -ne 'C0nfiguration')
-                {
-                    $configurationNames += $element.Value
-                    break
-                }
-            }
-        }
-        elseif ($commandName -eq 'Import-DscResource')
-        {
-            $importStatements += $command
-        }
-    }
+    $commands = [M365DSC.PSDesiredStateConfiguration.FastHostTextRewriter]::ListConfigurationCommands($ast)
+    $configurationNames = @($commands.ConfigurationNames)
+    $importStatements = @($commands.ImportStatements)
 
     $moduleSpecs = @()
     foreach ($statement in $importStatements)

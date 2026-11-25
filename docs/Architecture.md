@@ -73,7 +73,7 @@ flowchart TB
             driver["CimKeywordImplementationFunction.ps1<br/><i>per resource keyword driver</i>"]
             fast["FastHost.ps1<br/><i>Invoke-DscFastCompile, stripping, adapters</i>"]
             cache["SchemaCache.ps1<br/><i>Export/Test/Get-DscSchemaCache</i>"]
-            assembly["bin/M365DSC.PSDesiredStateConfiguration.CSharp.dll<br/><i>DscResourceInfo types, MOF property writer</i>"]
+            assembly["bin/M365DSC.PSDesiredStateConfiguration.CSharp.dll<br/><i>DscResourceInfo types, MOF property writer, text rewriter</i>"]
             base["Configuration/BaseRegistration<br/><i>base MOF and MFL schemas</i>"]
             compat["Compat/PSDesiredStateConfiguration<br/><i>compatibility module, same version</i>"]
         end
@@ -319,7 +319,8 @@ sequenceDiagram
 
 Before any of that can run, the text has to be rewritten, and every rewrite is steered by an AST
 taken from a masked copy rather than from the text itself. One parse serves every edit, and
-`ConvertTo-FastHostCompileText` applies all of them to the original text in a single pass.
+`ConvertTo-FastHostCompileText` applies all of them to the original text in a single pass. The tree
+walks and the edits run in `FastHostTextRewriter` in the module assembly.
 
 ```mermaid
 flowchart LR
@@ -347,7 +348,7 @@ reports for the masked copy points at exactly the same character in the untouche
 ### Stripping the imports
 
 `Get-StrippedConfigurationText` reads the declared configuration names and every `Import-DscResource`
-command off that masked AST. Each import contributes its `-Name`, `-ModuleName` and `-ModuleVersion`,
+command off that masked AST through `FastHostTextRewriter.ListConfigurationCommands`. Each import contributes its `-Name`, `-ModuleName` and `-ModuleVersion`,
 positionally or named, and only constant values count, meaning string literals and array literals of
 string literals. A computed module name would have to be executed before it is known, and executing
 the script is exactly what this path avoids, so such a script falls back instead.
@@ -649,7 +650,7 @@ every document goes through a single writer rather than through redirection.
 | `docs/` | This document and the fast host contract |
 | `test/` | Pester suites plus `TestModules`, small resource modules covering class based, script based, composite, credential, ambiguous name and state scenarios |
 | `tools/benchmarks/` | Compile benchmark, MOF comparison and benchmark configuration generator, with a checked in `baseline.json` |
-| `src/M365DSC.PSDesiredStateConfiguration.CSharp/` | The netstandard2.0 assembly with the MOF property writer and the resource value copier |
+| `src/M365DSC.PSDesiredStateConfiguration.CSharp/` | The netstandard2.0 assembly with the DscResourceInfo types, the MOF property writer, the resource value copier and the fast host text rewriter |
 | `Utilities/Build.ps1` | Build, validation and test entry point |
 
 `Build.ps1` keeps the module folder publishable. It builds the assembly at the module version into the
