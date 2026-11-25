@@ -993,6 +993,30 @@ Configuration NamelessResourceCfg
         $diagnostics | Should -Match 'instance name'
     }
 
+    It 'reports a property the resource does not have and writes no document' {
+        $text = @'
+Configuration FastUnknownMemberCfg
+{
+    Import-DscResource -ModuleName xTestClassResource
+    Node localhost
+    {
+        ResourceForTests1 a
+        {
+            Prop1 = 'x'
+            Prop2 = 'y'
+        }
+    }
+}
+'@
+        $output = Join-Path $TestDrive 'fast-unknown-member'
+        $diagnostics = Get-PSDscDiagnosticText {
+            Invoke-DscFastCompile -ScriptText $text -OutputPath $output -NoFallback
+        }
+
+        $diagnostics | Should -Match "The member 'Prop2' is not valid\. Valid members are 'DependsOn', 'Prop1', 'PsDscRunAsCredential'\."
+        Join-Path $output 'localhost.mof' | Should -Not -Exist
+    }
+
     It 'reports a value outside the value map of a property' {
         $text = @'
 Configuration FastBadValueMapCfg
