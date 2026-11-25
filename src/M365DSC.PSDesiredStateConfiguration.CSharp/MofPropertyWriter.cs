@@ -30,7 +30,21 @@ public static class MofPropertyWriter
         Other,
     }
 
-    /// <summary>Returns null when a property needs the PowerShell path.</summary>
+    /// <summary>
+    /// Writes the property lines of one MOF instance in ordinal property name order, in the format of the
+    /// PowerShell <c>stringify</c> function: <c>Name = value;</c> lines joined by a space, strings quoted
+    /// and escaped, arrays as braced lists, and embedded instance aliases written unquoted.
+    /// </summary>
+    /// <param name="properties">The property values of the instance, keyed by property name.</param>
+    /// <param name="propertyTypes">The keyword properties of the resource, used for the MOF type of each value.</param>
+    /// <param name="instanceAliases">The aliases of the embedded instances already written for the current node.</param>
+    /// <returns>
+    /// The property lines. <see langword="null"/> when <paramref name="properties"/> is empty, an argument is
+    /// null, a key is not a string, an embedded instance value is null, a property has a char, real or
+    /// datetime type, a value is a credential, hashtable, script block, wrapped object or non-array
+    /// collection, or a value needs a PowerShell conversion to its MOF type, such as a string for a boolean,
+    /// a decimal, or a negative number for an unsigned type. The PowerShell path then writes the instance.
+    /// </returns>
     public static string? WriteProperties(IDictionary? properties, IDictionary<string, DynamicKeywordProperty>? propertyTypes, IDictionary? instanceAliases)
     {
         if (properties is null || properties.Count == 0 || instanceAliases is null || propertyTypes is null)

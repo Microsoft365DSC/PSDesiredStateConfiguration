@@ -184,6 +184,7 @@ function Read-DscSchemaCacheFile
     {
         throw "Schema cache '$Path' has no header."
     }
+
     if ($header.formatVersion -eq $script:SchemaCacheFormatVersion -and $lines.Count -lt 2)
     {
         throw "Schema cache '$Path' is truncated."
@@ -432,6 +433,7 @@ function Test-DscSchemaCache
         Write-Warning -Message "Cache format version $($cache.formatVersion) is not the supported version $script:SchemaCacheFormatVersion."
         return $false
     }
+
     if ($cache.module.version -ne $manifest.ModuleVersion)
     {
         Write-Warning -Message "Cache is for module version $($cache.module.version); manifest declares $($manifest.ModuleVersion)."
@@ -529,11 +531,13 @@ function Get-DscSchemaCache
             Write-Verbose -Message "Schema cache '$candidate' has format version $($cache.formatVersion), expected $script:SchemaCacheFormatVersion."
             continue
         }
+
         if ($cache.module.name -ne $Module.Name -or $cache.module.version -ne $Module.Version.ToString())
         {
             Write-Warning -Message "Schema cache '$candidate' is for $($cache.module.name) $($cache.module.version), not $($Module.Name) $($Module.Version)."
             continue
         }
+
         if ($cache.module.fingerprint -ne $fingerprint)
         {
             $recorded = Get-DscSchemaCacheSourceFingerprint -ModuleBase $Module.ModuleBase -Cache $cache

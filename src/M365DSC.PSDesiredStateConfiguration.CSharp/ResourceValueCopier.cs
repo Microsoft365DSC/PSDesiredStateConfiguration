@@ -11,7 +11,22 @@ namespace M365DSC.PSDesiredStateConfiguration;
 /// <summary>Copies the values of a resource instance under their schema names for the values that raise no error.</summary>
 public static class ResourceValueCopier
 {
-    /// <summary>Returns the key values joined as the keyword implementation joins them, or null when a property needs the PowerShell path.</summary>
+    /// <summary>
+    /// Copies the values a resource instance sets into <paramref name="canonical"/> under the property
+    /// names of the keyword schema, applying the value map of each property, and builds the key value
+    /// string the keyword implementation uses to detect duplicate resources.
+    /// Nothing is written to <paramref name="canonical"/> when the method returns <see langword="null"/>.
+    /// </summary>
+    /// <param name="value">The values the configuration sets on the resource instance, keyed by property name.</param>
+    /// <param name="keyword">The keyword whose schema defines the properties, their key flags, allowed values and value maps.</param>
+    /// <param name="canonical">The dictionary that receives the copied values under their schema property names.</param>
+    /// <returns>
+    /// The values of the key properties, each prefixed with <c>::</c> and <c>::__NULL__</c> for a null key,
+    /// in the order of the keyword properties. <see langword="null"/> when any argument is null, a
+    /// mandatory property is missing, a property has a range, a value is outside the allowed values, a key
+    /// value is not a string, or a value of a mapped property is not a string. The PowerShell path then
+    /// handles the instance and reports the error.
+    /// </returns>
     public static string? CopyValues(IDictionary? value, DynamicKeyword? keyword, IDictionary? canonical)
     {
         if (value is null || keyword is null || canonical is null)

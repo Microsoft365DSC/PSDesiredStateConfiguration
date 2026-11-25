@@ -206,6 +206,7 @@ function Get-Median
     $sorted = @($Values | Sort-Object)
     $n = $sorted.Count
     if ($n -eq 0) { return $null }
+
     if ($n % 2 -eq 1)
     {
         return [math]::Round($sorted[($n - 1) / 2], 4)
@@ -283,6 +284,7 @@ $childScript = $childScript.Replace('__ENGINEMANIFEST__', (ConvertTo-SingleQuote
                         $cellError = $result.error
                         break
                     }
+
                     if ($run -gt 0)
                     {
                         $parseSamples += [double]$result.parseSec

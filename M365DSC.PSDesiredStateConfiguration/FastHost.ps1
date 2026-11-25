@@ -111,6 +111,7 @@ function Get-FastHostKeywordName
             $null = $names.Add($key)
         }
     }
+
     if ($script:FastHostKeywordSource)
     {
         foreach ($cache in $script:FastHostKeywordSource)
@@ -155,10 +156,12 @@ function Register-DscSchemaCache
     {
         $script:FastHostKeywords = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,System.Management.Automation.Language.DynamicKeyword]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
     }
+
     if ($null -eq $script:FastHostAdapters)
     {
         $script:FastHostAdapters = New-Object -TypeName 'System.Collections.Generic.Dictionary[string,scriptblock]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
     }
+
     if ($null -eq $script:FastHostKeywordSource)
     {
         $script:FastHostKeywordSource = New-Object -TypeName 'System.Collections.Generic.List[System.Object]'
@@ -405,6 +408,7 @@ function ConvertTo-FastHostCompileText
                 {
                     $edits.Add([PSCustomObject]@{ Start = $gapStart; Length = $gapLength; Text = ' ' })
                 }
+
                 if ($Convert -and $expression.Expression -is [System.Management.Automation.Language.ScriptBlockExpressionAst])
                 {
                     $offset = $second.Extent.StartOffset
@@ -693,10 +697,12 @@ function Resolve-FastHostModule
         {
             continue
         }
+
         if ($ModuleVersion -and $version -ne $ModuleVersion)
         {
             continue
         }
+
         if ($null -eq $best -or $version -gt $best.Version)
         {
             $best = [PSCustomObject]@{
@@ -831,6 +837,7 @@ function New-FastHostCompilation
         {
             $cache = Get-DscSchemaCache -Module $module -SchemaCachePath $SchemaCachePath
         }
+
         if (-not $cache)
         {
             $cache = New-DscSchemaCacheForModule -Module $module
@@ -1063,10 +1070,12 @@ function Invoke-DscFastCompileBody
         {
             $invokeArguments = $Parameters.Clone()
         }
+
         if ($null -ne $ConfigurationData)
         {
             $invokeArguments['ConfigurationData'] = $ConfigurationData
         }
+
         if ($OutputPath)
         {
             $invokeArguments['OutputPath'] = $OutputPath
