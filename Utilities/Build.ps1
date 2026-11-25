@@ -99,6 +99,38 @@ if ($compatManifest.ModuleVersion -ne $version)
     [System.IO.File]::WriteAllText($compatManifestPath, $content)
 }
 
+#endregion
+
+#region Assembly
+
+$assemblyName = 'M365DSC.PSDesiredStateConfiguration.CSharp'
+$projectRoot = Join-Path -Path $RepositoryRoot -ChildPath "src/$assemblyName"
+$projectPath = Join-Path -Path $projectRoot -ChildPath "$assemblyName.csproj"
+$projectOutput = Join-Path -Path $projectRoot -ChildPath 'bin/Release/netstandard2.0'
+$moduleBin = Join-Path -Path $moduleRoot -ChildPath 'bin'
+
+if (-not (Get-Command -Name dotnet -ErrorAction Ignore))
+{
+    throw 'The .NET SDK is required to build the module assembly. Install it from https://dotnet.microsoft.com/download.'
+}
+
+$buildOutput = & dotnet build $projectPath -c Release --nologo "-p:Version=$version" 2>&1
+if ($LASTEXITCODE -ne 0)
+{
+    throw "Building $assemblyName failed:$([Environment]::NewLine)$($buildOutput -join [Environment]::NewLine)"
+}
+
+$null = New-Item -Path $moduleBin -ItemType Directory -Force
+foreach ($extension in 'dll', 'pdb', 'xml')
+{
+    Copy-Item -Path (Join-Path -Path $projectOutput -ChildPath "$assemblyName.$extension") -Destination $moduleBin -Force
+}
+Write-BuildLog -Message "Built $assemblyName $version into bin"
+
+#endregion
+
+#region Manifest validation
+
 $null = Test-ModuleManifest -Path $manifestPath
 $null = Test-ModuleManifest -Path $compatManifestPath
 Write-BuildLog -Message 'Manifests validated'
@@ -111,6 +143,10 @@ $probe = @"
 `$ErrorActionPreference = 'Stop'
 Import-Module -Name '$($manifestPath.Replace("'", "''"))' -Force
 `$module = Get-Module -Name '$moduleName'
+if (-not ('M365DSC.PSDesiredStateConfiguration.MofPropertyWriter' -as [type]))
+{
+    throw 'The module did not load its assembly.'
+}
 `$expected = @('$((@($manifest.FunctionsToExport) | Sort-Object) -join "','")')
 `$missing = @(`$expected | Where-Object { -not `$module.ExportedFunctions.ContainsKey(`$_) })
 if (`$missing.Count -gt 0)

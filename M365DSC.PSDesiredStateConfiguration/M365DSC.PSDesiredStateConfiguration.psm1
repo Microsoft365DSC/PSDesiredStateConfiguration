@@ -4913,11 +4913,6 @@ New-Alias -Name 'gcfgs' -Value 'Get-DscConfigurationStatus'
 . "$PSScriptRoot\SchemaCache.ps1"
 . "$PSScriptRoot\FastHost.ps1"
 
-if (-not ('M365DSC.PSDesiredStateConfiguration.MofPropertyWriter' -as [type]))
-{
-    Add-Type -Path "$PSScriptRoot\MofPropertyWriter.cs"
-}
-
 # The engine compiles every configuration body into a call to the module-qualified
 # name 'PSDesiredStateConfiguration\Configuration' and resolves it by name at
 # invocation time. This module ships under its own name, so it claims that literal
