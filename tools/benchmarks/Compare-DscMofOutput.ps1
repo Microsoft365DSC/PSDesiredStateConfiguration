@@ -197,6 +197,7 @@ function Get-MofBlocks
             {
                 continue
             }
+
             if ($prop.Name -ieq 'ResourceID')
             {
                 $resourceId = $prop.Value.Trim('"')
@@ -369,7 +370,9 @@ function Compare-NormalizedLines
         $refLine = '<missing>'
         $candLine = '<missing>'
         if ($i -lt $ReferenceLines.Count) { $refLine = $ReferenceLines[$i] }
+
         if ($i -lt $CandidateLines.Count) { $candLine = $CandidateLines[$i] }
+
         if ([string]::CompareOrdinal($refLine, $candLine) -ne 0)
         {
             $equal = $false
@@ -377,6 +380,7 @@ function Compare-NormalizedLines
             {
                 Write-Host ('--- MOF difference starting at normalized line {0} ---' -f ($i + 1))
             }
+
             if ($shown -lt 40)
             {
                 Write-Host ('<= ' + $refLine)
